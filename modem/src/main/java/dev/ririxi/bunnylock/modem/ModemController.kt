@@ -1167,18 +1167,20 @@ class ModemController(
     suspend fun setNetMode(mode: NetMode) =
         change("change the network mode", "Network mode is now \"${mode.label}\".") {
             val subscriptionId = subId()
+            // A modem without 5G never reads the 5G bit back, so asking for it would look like a refusal.
+            val mask = if (current.supports5g) mode.mask else mode.mask and Masks.G5.inv()
             val result =
                 try {
                     helper.call("aosp.setAllowed", NET_MODE_TIMEOUT_MS) {
                         put("subId", subscriptionId)
-                        put("mask", mode.mask)
+                        put("mask", mask)
                         put("slot", current.sim - 1)
                     }
                 } catch (e: Exception) {
                     if (current.backend != Backend.QUALCOMM) throw e
                     helper.call("qc.setRat") {
                         put("sim", current.sim)
-                        put("mask", Masks.toQmi(mode.mask))
+                        put("mask", Masks.toQmi(mask))
                         put("persist", current.persist)
                     }
                 }

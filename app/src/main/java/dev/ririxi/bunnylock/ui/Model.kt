@@ -46,5 +46,7 @@ data class UiState(
 ) {
     fun favoritesOf(group: Group): Set<Int> = favoriteBands[group.favoritesKey].orEmpty()
 
+    val lockRat get() = if (modem.supports5g) form.rat else LockRat.LTE
+
     fun selectedBands(groupState: BandGroupState): Set<Int> = bandSelections[groupState.group] ?: groupState.allowed
 }

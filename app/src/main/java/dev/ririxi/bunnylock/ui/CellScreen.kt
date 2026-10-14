@@ -245,15 +245,17 @@ private fun CellLockForm(
     vm: MainViewModel,
 ) {
     val form = state.form
-    val locksLte = form.rat != LockRat.NR
-    val locksNr = form.rat != LockRat.LTE
+    val locksLte = state.lockRat != LockRat.NR
+    val locksNr = state.lockRat != LockRat.LTE
     Panel {
-        ConnectedChoice(
-            options = LockRat.entries,
-            selected = form.rat,
-            label = { it.label },
-            onSelect = { selected -> vm.updateForm { copy(rat = selected) } },
-        )
+        if (state.modem.supports5g) {
+            ConnectedChoice(
+                options = LockRat.entries,
+                selected = form.rat,
+                label = { it.label },
+                onSelect = { selected -> vm.updateForm { copy(rat = selected) } },
+            )
+        }
 
         if (locksLte) LteLockFields(state, vm)
         if (locksNr) NrLockFields(state, vm)
@@ -282,7 +284,7 @@ private fun LteLockFields(
     vm: MainViewModel,
 ) {
     val form = state.form
-    Text(if (form.rat == LockRat.NSA) "LTE anchor" else "LTE", style = MaterialTheme.typography.titleSmallEmphasized)
+    Text(if (state.lockRat == LockRat.NSA) "LTE anchor" else "LTE", style = MaterialTheme.typography.titleSmallEmphasized)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             form.lteEarfcn,
@@ -311,7 +313,7 @@ private fun NrLockFields(
     vm: MainViewModel,
 ) {
     val form = state.form
-    Text(if (form.rat == LockRat.NSA) "NR secondary (SCG)" else "5G NR", style = MaterialTheme.typography.titleSmallEmphasized)
+    Text(if (state.lockRat == LockRat.NSA) "NR secondary (SCG)" else "5G NR", style = MaterialTheme.typography.titleSmallEmphasized)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             form.nrArfcn,

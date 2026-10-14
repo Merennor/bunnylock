@@ -224,7 +224,7 @@ object Aosp {
         val causes =
             removedByReason.map { (reason, removed) ->
                 when (reason) {
-                    REASON_POWER -> "power saving (Battery Saver, for example) is on"
+                    REASON_POWER -> "power saving (Battery Saver or Adaptive connectivity) is on"
                     REASON_CARRIER -> "the carrier settings leave out ${andList(removed)}"
                     else -> "the \"Allow 2G\" setting is off"
                 }

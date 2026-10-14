@@ -301,7 +301,7 @@ class MainViewModel(
             val form = ui.form
             val request =
                 CellLockRequest(
-                    rat = form.rat,
+                    rat = state.value.lockRat,
                     earfcn = form.lteEarfcn.toLongOrNull(),
                     ltePcis = parseInts(form.ltePcis),
                     nrArfcn = form.nrArfcn.toLongOrNull(),

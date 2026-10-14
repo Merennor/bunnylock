@@ -322,9 +322,27 @@ data class ModemState(
             return picks.toList()
         }
 
+    val supports5g: Boolean
+        get() {
+            val types = supportedTypes ?: return true
+            // A report without LTE is incomplete, so it can't rule 5G out.
+            return types and Masks.G4 == 0L || types and Masks.G5 != 0L || groups.any { it.group.isNr }
+        }
+
+    val netModes: List<NetMode>
+        get() = if (supports5g) NetMode.entries else NetMode.entries.filter { it.mask and Masks.G5 == 0L } - NetMode.NO_NR
+
+    val netMode: NetMode?
+        get() = NetMode.of(allowedMask).let { if (it == NetMode.NO_NR && !supports5g) NetMode.AUTO else it }
+
     val supportsNrMode get() =
-        backend == Backend.QUALCOMM || backend == Backend.PIXEL ||
-            (backend == Backend.ANDROID && device?.samsungNrMode == true)
+        supports5g &&
+            when (backend) {
+                Backend.QUALCOMM, Backend.PIXEL -> true
+                Backend.ANDROID -> device?.samsungNrMode == true
+                else -> false
+            }
+    val supportsNrDc get() = supports5g && device?.aospNrDc == true
     val mtkAtCellLock get() = backend == Backend.MEDIATEK && !mtkCellLockRefused
 
     /** Every other cell lock goes through the radio HAL, which locks a frequency but never a PCI. */

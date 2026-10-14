@@ -32,7 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.ririxi.bunnylock.modem.Backend
 import dev.ririxi.bunnylock.modem.BandGroupState
-import dev.ririxi.bunnylock.modem.NetMode
 import dev.ririxi.bunnylock.modem.NrMode
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -45,14 +44,14 @@ fun BandsScreen(
     LazyColumn(contentPadding = contentPadding.withScreenMargins(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             SectionHeader("Network mode")
-            val currentMode = NetMode.of(state.modem.allowedMask)
+            val currentMode = state.modem.netMode
             Panel {
                 ToggleGrid(
-                    options = NetMode.entries,
+                    options = state.modem.netModes,
                     isChecked = { it == currentMode },
                     label = { it.label },
                     onToggle = vm::setNetMode,
-                    columns = 3,
+                    columns = if (state.modem.supports5g) 3 else 2,
                     enabled = !state.busy,
                 )
                 state.modem.netModeHeldBack?.let { heldBack ->
@@ -80,7 +79,7 @@ fun BandsScreen(
                 }
             }
 
-            state.modem.device?.aospNrDc == true -> {
+            state.modem.supportsNrDc -> {
                 item {
                     SectionHeader("5G NSA (EN-DC)")
                     ConnectedChoice(

@@ -12,7 +12,7 @@ android {
         minSdk = 30
         targetSdk = 37
         versionCode = 1
-        versionName = "1.2.0"
+        versionName = "1.2.1"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
@@ -37,7 +37,7 @@ android {
     }
 
     packaging {
-        // The root helper System.load()s libbunnyqrtr.so from nativeLibraryDir, so it must be extracted.
+        // The root helper System.load() libbunnyqrtr.so from nativeLibraryDir, so it must be extracted.
         jniLibs.useLegacyPackaging = true
     }
 }
