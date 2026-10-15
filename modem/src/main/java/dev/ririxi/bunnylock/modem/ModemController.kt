@@ -110,6 +110,8 @@ private const val RIL_NODE_PREFIX = "ril:"
 
 private fun rilNode(sim: Int) = "$RIL_NODE_PREFIX$sim"
 
+private class LockUnanswered : IllegalStateException("The radio didn't answer, so it may not support locks through Android's radio HAL.")
+
 class ModemController(
     context: Context,
     private val scope: CoroutineScope,
@@ -403,6 +405,7 @@ class ModemController(
                 put("split", splitRefused)
             }
         result.optString("diagnostic").takeIf { it.isNotBlank() }?.let { log("HAL channel lock: $it") }
+        if (!result.optBoolean("answered", true)) throw LockUnanswered()
     }
 
     /** Old Qualcomm phones that can't report their bands, where an unlock only brings back the saved lock. */
@@ -672,8 +675,13 @@ class ModemController(
         cells: List<Cell>,
         signals: List<Signal>,
     ): List<Carrier> {
-        val reported = runCatching { Carriers.fromReport(helper.call("aosp.carriers") { put("sim", sim) }.optJSONArray("carriers")) }
-        return Carriers.complete(reported.getOrDefault(emptyList()).ifEmpty { backendCarriers }, cells, signals)
+        val reported =
+            runCatching { Carriers.fromReport(helper.call("aosp.carriers") { put("sim", sim) }.optJSONArray("carriers")) }
+                .getOrDefault(emptyList())
+        // Some radio HALs leave out channels and PCIs.
+        val identified = reported.any { it.arfcn !== null || it.pci !== null }
+        val carriers = if (identified) reported else backendCarriers + reported.filter { carrier -> backendCarriers.none { it.rat == carrier.rat } }
+        return Carriers.complete(carriers, cells, signals)
     }
 
     suspend fun refreshConnection() {
@@ -1091,10 +1099,10 @@ class ModemController(
         if (allBandsSelected && group == Group.LTE) replaceSavedLteBands()
         val bandsOnlySpecs = bandSpecs(override)
         val bandsOnlyResult = runCatching { setChannels(bandsOnlySpecs) }
+        val failure = bandsOnlyResult.exceptionOrNull()
         var note: String? = null
-        if (bandsOnlyResult.isFailure && !allBandsSelected && !needsChannels) {
-            val failure = bandsOnlyResult.exceptionOrNull()
-            val error = failure?.message?.takeIf { it.isNotBlank() } ?: failure?.javaClass?.simpleName ?: "unknown error"
+        if (failure !== null && failure !is LockUnanswered && !allBandsSelected && !needsChannels) {
+            val error = failure.message?.takeIf { it.isNotBlank() } ?: failure.javaClass.simpleName
             log("HAL band-lock diagnostic: request=$bandsOnlySpecs; error=$error; ${bandLockProbe(group, bands)}; retry=band+channel.")
             setChannels(bandSpecs(override, withChannels = true))
             needsChannels = true

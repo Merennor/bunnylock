@@ -110,14 +110,37 @@ object Carriers {
         val carriers = current + fromCells(cells).filter { serving -> current.none { it.rat == serving.rat } }
         val ordered = carriers.sortedWith(compareByDescending<Carrier> { it.primary }.thenBy { it.rat.ordinal })
         return ordered.mapIndexed { index, carrier ->
-            val cell = cells.firstOrNull { it.rat == carrier.rat && it.arfcn == carrier.arfcn && it.pci == carrier.pci }
             val leadsItsNetwork = ordered.indexOfFirst { it.rat == carrier.rat } == index
+            val cell = cellOf(carrier, cells, leadsItsNetwork)
             val networkRsrp = if (leadsItsNetwork) signals.firstOrNull { it.rat == carrier.rat }?.rsrp else null
             carrier.copy(
+                arfcn = carrier.arfcn ?: cell?.arfcn,
+                pci = carrier.pci ?: cell?.pci?.takeIf { it >= 0 },
                 band = carrier.band ?: cell?.band,
                 bandwidthKhz = carrier.bandwidthKhz ?: cell?.bandwidthKhz,
                 rsrp = carrier.rsrp ?: cell?.rsrp ?: networkRsrp,
             )
+        }
+    }
+
+    /** Without a channel or PCI, a carrier can only be matched to the serving cell. */
+    private fun cellOf(
+        carrier: Carrier,
+        cells: List<Cell>,
+        leadsItsNetwork: Boolean,
+    ): Cell? {
+        val agreeing =
+            cells.filter { cell ->
+                cell.rat == carrier.rat &&
+                    (carrier.arfcn === null || cell.arfcn == carrier.arfcn) &&
+                    (carrier.pci === null || cell.pci == carrier.pci) &&
+                    (carrier.band === null || cell.band === null || cell.band == carrier.band)
+            }
+        val serving = if (leadsItsNetwork) agreeing.firstOrNull { it.registered } else null
+        return when {
+            carrier.arfcn !== null && carrier.pci !== null -> agreeing.firstOrNull()
+            carrier.arfcn !== null || carrier.pci !== null -> serving ?: agreeing.singleOrNull()
+            else -> serving
         }
     }
 }

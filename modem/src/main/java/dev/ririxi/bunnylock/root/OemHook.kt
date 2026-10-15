@@ -19,9 +19,9 @@ private typealias OemRequest = (slot: Int, request: ByteArray, response: ByteArr
 
 /**
  * AT commands through a telephony service instead of the modem tty, so it works for the ADB shell user
- * (Shizuku) as well as root. Candidates: MediaTek's phoneEx (invokeOemRilRequestRaw*), vendor services
- * with an AT method (e.g. Oplus' IOplusTelephonyInternalExt.sendAtCmd), and ITelephony's OEM request
- * (Android 11 to 14). A candidate is only used after a plain "AT" gets a valid answer.
+ * (Shizuku) as well as root. Candidates: MediaTek's phoneEx (invokeOemRilRequestRaw*), Motorola's
+ * motoexttelephony (vendorInvokeOemRilRequestRawSync), vendor services with an AT method
+ * (e.g. Oplus' IOplusTelephonyInternalExt.sendAtCmd), and ITelephony's OEM request (Android 11 to 14). A candidate is only used after a plain "AT" gets a valid answer.
  */
 object OemHook {
     const val PREFIX = "ril:"
@@ -223,6 +223,17 @@ object OemHook {
                 targets +=
                     Target("$name.${method.name}", isAtMethod = false) { _, request, response ->
                         method.invoke(service, request, response) as Int
+                    }
+            }
+        // Motorola's takes a subscription ID, not a slot.
+        methods
+            .firstOrNull {
+                it.name == "vendorInvokeOemRilRequestRawSync" &&
+                    it.takes(Int::class.javaPrimitiveType, ByteArray::class.java, ByteArray::class.java)
+            }?.let { method ->
+                targets +=
+                    Target("$name.${method.name}", isAtMethod = false) { slot, request, response ->
+                        method.invoke(service, Aosp.resolveSubId(-1, slot), request, response) as Int
                     }
             }
         methods.filter { AT_METHOD.containsMatchIn(it.name) }.forEach { method ->

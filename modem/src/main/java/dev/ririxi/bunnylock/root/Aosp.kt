@@ -14,7 +14,11 @@ import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * ITelephony called as uid 0 so MODIFY_PHONE_STATE checks pass. Only works where the
@@ -53,6 +57,13 @@ object Aosp {
 
     private const val BOOLEAN_CONSUMER = "com.android.internal.telephony.IBooleanConsumer"
     private const val CHANNELS_CALLBACK_TIMEOUT_SECONDS = 8L
+    private const val CHANNEL_READ_TIMEOUT_MS = 3000L
+
+    private val channelReader = Executors.newCachedThreadPool { runnable -> Thread(runnable, "bunny-channel-read").apply { isDaemon = true } }
+
+    // Each unanswered read holds a thread in the phone process.
+    @Volatile
+    private var unansweredChannelRead: Future<*>? = null
 
     private const val RADIO_OFF_PAUSE_MS = 2500L
     private const val MODE_READBACK_CHECKS = 5
@@ -283,11 +294,8 @@ object Aosp {
         modemAllowed?.let { json.put("modemAllowed", it) }
         supportedTypes()?.let { json.put("supportedTypes", it) }
         runCatching { json.put("nrDc", call("isNrDualConnectivityEnabled", subId) as Boolean) }
-        runCatching {
-            @Suppress("UNCHECKED_CAST")
-            val channels = call("getSystemSelectionChannels", subId) as List<RadioAccessSpecifier>?
-            json.put("channels", specsToJson(channels ?: emptyList()))
-        }.onFailure { json.put("channelsError", it.message ?: it.javaClass.simpleName) }
+        runCatching { json.put("channels", specsToJson(readChannels(subId))) }
+            .onFailure { json.put("channelsError", it.message ?: it.javaClass.simpleName) }
         runCatching { json.put("selectionMode", call("getNetworkSelectionMode", subId) as Int) }
         runCatching {
             val manualPlmn = call("getManualNetworkSelectionPlmn", subId) as String?
@@ -440,7 +448,7 @@ object Aosp {
         return JSONObject().put("nrDc", state == NR_DC_ENABLE)
     }
 
-    /** An empty list removes the restriction. */
+    /** An empty list removes the restriction. A radio that never answers gives answered=false. */
     fun setChannels(
         subId: Int,
         specs: JSONArray,
@@ -455,12 +463,10 @@ object Aosp {
         val split = if (splitRefused) whole.flatMap(::splitToRilBands) else whole
         val requestDiagnostic = channelRequestDiagnostic(subId, specs)
         val outcomes = ArrayList<String>()
-        var lastAnswer: Boolean? = null
         // When nothing had to be split both lists have the same size, and only the first is tried.
         for (specifiers in listOf(whole, split).distinctBy { it.size }) {
             val shape = if (specifiers === whole) "as sent" else "split into ${specifiers.size} specifiers"
             val (answer, callbackDiagnostic) = requestChannels(subId, specifiers, requestDiagnostic)
-            lastAnswer = answer
             outcomes += "$shape: $callbackDiagnostic"
             if (answer == true) {
                 return JSONObject()
@@ -468,14 +474,17 @@ object Aosp {
                     .put("channels", specsToJson(specifiers))
                     .put("diagnostic", "$requestDiagnostic; ${outcomes.joinToString("; ")}; after=${channelState(subId)}")
             }
-            // Only an explicit refusal is retried in pieces. When no answer came, the attempts end here.
-            if (answer === null) break
+            // Only a refusal is retried in pieces.
+            if (answer === null) {
+                return JSONObject()
+                    .put("answered", false)
+                    .put("diagnostic", "$requestDiagnostic; ${outcomes.joinToString("; ")}")
+            }
         }
         val rejected = "Android's radio service rejected the channel lock"
         val fewer = "Selecting $MAX_RIL_BANDS or fewer bands may work on this phone."
         val failure =
             when {
-                lastAnswer === null -> "Android's radio service didn't confirm the channel lock."
                 split.size > whole.size -> "$rejected, also with the bands split into groups of $MAX_RIL_BANDS. $fewer"
                 whole.any { it.bands.size > MAX_RIL_BANDS } -> "$rejected. $fewer"
                 else -> "$rejected."
@@ -582,12 +591,25 @@ object Aosp {
         return result to "$callbackDiagnostic after ${elapsedMs}ms"
     }
 
-    private fun channelState(subId: Int): String =
-        runCatching {
-            @Suppress("UNCHECKED_CAST")
-            val current = call("getSystemSelectionChannels", subId) as? List<RadioAccessSpecifier>
-            specsToJson(current.orEmpty()).toString()
-        }.getOrElse(::errorText)
+    private fun channelState(subId: Int): String = runCatching { specsToJson(readChannels(subId)).toString() }.getOrElse(::errorText)
+
+    /** ITelephony waits on the radio here without a time limit. */
+    private fun readChannels(subId: Int): List<RadioAccessSpecifier> {
+        if (unansweredChannelRead?.isDone == false) throw IllegalStateException("The radio still hasn't answered an earlier channel read.")
+        val read =
+            channelReader.submit<List<RadioAccessSpecifier>> {
+                @Suppress("UNCHECKED_CAST")
+                (call("getSystemSelectionChannels", subId) as? List<RadioAccessSpecifier>).orEmpty()
+            }
+        return try {
+            read.get(CHANNEL_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            unansweredChannelRead = read
+            throw IllegalStateException("The radio didn't answer the channel read in time.")
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
 
     /** When the radio HAL doesn't support or refuses the modem reboot, the radio is power-cycled instead and the reason is returned as rebootError. */
     fun rebootModem(
