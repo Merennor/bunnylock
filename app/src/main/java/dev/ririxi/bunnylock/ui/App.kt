@@ -4,26 +4,36 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
@@ -48,15 +58,26 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.ririxi.bunnylock.data.Release
 import dev.ririxi.bunnylock.modem.Access
 import dev.ririxi.bunnylock.modem.RootState
+import dev.ririxi.bunnylock.modem.SimInfo
+import kotlinx.coroutines.delay
+
+private const val LIVE_REFRESH_PAUSE_MS = 500L
 
 enum class Tab(
     val label: String,
@@ -73,6 +94,7 @@ enum class Tab(
 fun BunnyApp(vm: MainViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    if (state.modem.root == RootState.Granted && (selectedTab == Tab.HOME || selectedTab == Tab.CELL)) LiveRefresh(vm)
     val snackbar = remember { SnackbarHostState() }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     LaunchedEffect(Unit) { vm.events.collect { snackbar.showSnackbar(it) } }
@@ -89,6 +111,9 @@ fun BunnyApp(vm: MainViewModel) {
                 title = { Wordmark() },
                 subtitle = { Text(topBarSubtitle(state)) },
                 actions = {
+                    if (state.modem.sims.size > 1) {
+                        SimChip(state.modem.sims, state.modem.sim, enabled = !state.busy, onSelect = vm::setSim)
+                    }
                     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                         when {
                             state.busy || (state.modem.refreshing && !pulledToRefresh) || state.modem.root == RootState.Checking -> {
@@ -225,15 +250,74 @@ private fun UpdateDialog(
     )
 }
 
+@Composable
+private fun LiveRefresh(vm: MainViewModel) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                vm.refreshConnection()
+                delay(LIVE_REFRESH_PAUSE_MS)
+            }
+        }
+    }
+}
+
 private fun topBarSubtitle(state: UiState): String {
-    val backendAndSim =
-        listOfNotNull(
-            state.modem.backend?.label,
-            if (state.modem.sims.size > 1) "SIM ${state.modem.sim}" else null,
-        )
     val throughShizuku = state.modem.access == Access.SHIZUKU_ADB || state.modem.access == Access.SHIZUKU_ROOT
     val accessSuffix = if (throughShizuku) ", through Shizuku" else ""
-    return backendAndSim.joinToString(" on ").ifEmpty { "Band and cell locking" } + accessSuffix
+    return (state.modem.backend?.label ?: "Band and cell locking") + accessSuffix
+}
+
+/** [selected] counts from 1. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SimChip(
+    sims: List<SimInfo>,
+    selected: Int,
+    enabled: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = sims.firstOrNull { it.slot + 1 == selected } ?: return
+    Box {
+        FilledTonalButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            shapes = ButtonDefaults.shapes(),
+            contentPadding = PaddingValues(start = 8.dp, end = 6.dp),
+            modifier = Modifier.semantics { contentDescription = "SIM $selected, ${current.name}. Switch SIM" },
+        ) {
+            SimNumber(selected)
+            Spacer(Modifier.width(8.dp))
+            Text(current.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            sims.forEach { sim ->
+                val number = sim.slot + 1
+                DropdownMenuItem(
+                    text = { Text("SIM $number: ${sim.name}") },
+                    leadingIcon = { SimNumber(number) },
+                    trailingIcon = { if (number == selected) Icon(Icons.Rounded.Check, contentDescription = "Selected") },
+                    onClick = {
+                        expanded = false
+                        if (number != selected) onSelect(number)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimNumber(number: Int) {
+    val colors = MaterialTheme.colorScheme
+    val container = if (number == 1) colors.primary else colors.tertiary
+    val content = if (number == 1) colors.onPrimary else colors.onTertiary
+    Box(Modifier.size(20.dp).clip(RoundedCornerShape(6.dp)).background(container), contentAlignment = Alignment.Center) {
+        Text("$number", color = content, style = MaterialTheme.typography.labelMedium)
+    }
 }
 
 @Composable

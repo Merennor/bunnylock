@@ -1,8 +1,32 @@
-# bunnylock
+<p align="center">
+  <img src=".github/banner.png" alt="bunnylock" width="640">
+</p>
 
 bunnylock is an Android app for band, RAT, and cell locking. It talks to the modem through root or Shizuku and picks the best backend available on the phone.
 
 Modems are weird, and vendors rarely implement the same controls in the same way. Something working on one phone does not guarantee that it will work on every phone with the same chipset or Android version.
+
+<table>
+  <tr>
+    <td align="center"><img src=".github/screenshots/home.jpg" alt="Home screen with the lock status, carriers and signal" width="200"></td>
+    <td align="center"><img src=".github/screenshots/bands.jpg" alt="Bands screen with network mode and band selection" width="200"></td>
+    <td align="center"><img src=".github/screenshots/cells.jpg" alt="Cell lock screen with visible cells" width="200"></td>
+    <td align="center"><img src=".github/screenshots/tools.jpg" alt="Tools screen with backend, radio and console options" width="200"></td>
+  </tr>
+  <tr>
+    <td align="center">Home</td>
+    <td align="center">Bands</td>
+    <td align="center">Cell lock</td>
+    <td align="center">Tools</td>
+  </tr>
+</table>
+
+> [!CAUTION]
+> bunnylock changes low-level modem settings. Some of them stay after a reboot, and modems don't always react the way you'd expect. **You use it at your own risk.**
+>
+> The author isn't responsible for any issues or damage it causes. That includes losing service or messages (emergency calls too), lost data, or a phone that stops working properly. Before you experiment, make sure you know how to undo a change: **Unlock all**, or a network settings reset in your phone's settings.
+>
+> bunnylock is provided "as is", without any warranty. See the [license](LICENSE) for the full terms.
 
 ## Features
 

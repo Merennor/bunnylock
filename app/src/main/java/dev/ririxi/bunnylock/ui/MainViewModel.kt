@@ -122,6 +122,8 @@ class MainViewModel(
 
     fun refresh() = modem.refresh()
 
+    suspend fun refreshConnection() = modem.refreshConnection()
+
     /** "Unlock all" from the notification. Waits for the helper if the app was just started. */
     fun unlockFromNotification() {
         if (modem.state.value.root == RootState.Granted && modem.helperRunning) unlockEverything() else pendingUnlock = true

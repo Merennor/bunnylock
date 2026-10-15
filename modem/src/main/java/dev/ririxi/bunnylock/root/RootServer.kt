@@ -99,6 +99,8 @@ object RootServer {
 
             "aosp.state" -> Aosp.state(subId)
 
+            "aosp.carriers" -> PhysicalChannels.report(simSlot)
+
             "aosp.setAllowed" -> Aosp.setAllowed(subId, request.getLong("mask"), request.optInt("slot", simSlot))
 
             "aosp.setNrDc" -> Aosp.setNrDc(subId, request.getInt("state"))

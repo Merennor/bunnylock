@@ -10,12 +10,15 @@ import android.telephony.TelephonyManager
 import dev.ririxi.bunnylock.core.Bands
 import dev.ririxi.bunnylock.core.Ran
 import dev.ririxi.bunnylock.core.toIntList
+import dev.ririxi.bunnylock.data.Carrier
+import dev.ririxi.bunnylock.data.Carriers
 import dev.ririxi.bunnylock.data.Cell
 import dev.ririxi.bunnylock.data.Cells
 import dev.ririxi.bunnylock.data.PrivilegedClient
 import dev.ririxi.bunnylock.data.Rat
 import dev.ririxi.bunnylock.data.RootClient
 import dev.ririxi.bunnylock.data.RootException
+import dev.ririxi.bunnylock.data.Signal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -42,6 +45,7 @@ private data class BackendReadout(
     /** The modem answered about network selection, so the framework's stored value must not override it. */
     val plmnReported: Boolean = false,
     val cells: List<Cell> = emptyList(),
+    val carriers: List<Carrier> = emptyList(),
 )
 
 private const val MAX_HAL_CHANNELS = 32
@@ -65,10 +69,6 @@ private val COMMON_NR_BANDS_ELSEWHERE = listOf(1, 3, 5, 8, 28, 40, 41, 78)
 private val GERAN_RESTORE_BANDS = listOf(8, 9, 10, 11, 12, 13)
 private val UTRAN_RESTORE_BANDS = listOf(1, 2, 3, 4, 5, 8, 9, 19)
 private const val MAX_LOG_LINES = 80
-
-private const val SAMSUNG_SA_ONLY = 0
-private const val SAMSUNG_NSA_ONLY = 1
-private const val SAMSUNG_SA_NSA = 2
 
 /** QMI's network selection preference. 0 is automatic. */
 private const val QMI_NET_SEL_MANUAL = 1
@@ -102,6 +102,8 @@ private const val HAL_LOCK_RECHECK_MS = 6000L
 private const val HAL_LOCK_RECHECKS = 2
 
 private const val PIXEL_AT_NODE = "/dev/umts_router"
+
+private const val LIVE_CELL_SCAN_WAIT_MS = 1500L
 
 /** An AT node that starts like this sends commands through MediaTek's RIL passthrough instead of a modem tty. */
 private const val RIL_NODE_PREFIX = "ril:"
@@ -137,6 +139,10 @@ class ModemController(
     val helperRunning get() = helper.running
 
     private val current get() = _state.value
+
+    // From the last full refresh, reused by the live ones.
+    private var backendCells: List<Cell> = emptyList()
+    private var backendCarriers: List<Carrier> = emptyList()
 
     private inline fun updateState(transform: ModemState.() -> ModemState) = _state.update(transform)
 
@@ -613,7 +619,11 @@ class ModemController(
                 context
                     .getSystemService(TelephonyManager::class.java)
                     .let { if (subscriptionId >= 0) it.createForSubscriptionId(subscriptionId) else it }
+            backendCells = modem.cells
+            backendCarriers = modem.carriers
             val cells = Cells.merge(modem.cells, Cells.scan(context, subscriptionId))
+            val signals = Carriers.signals(context, subscriptionId)
+            val carriers = connectionCarriers(sim, cells, signals)
             val groups =
                 when (current.backend) {
                     Backend.ANDROID, null -> withStrayBands(modem, cells)
@@ -640,6 +650,8 @@ class ModemController(
                     homePlmn = telephony.simOperator?.takeIf { it.length >= 5 },
                     homeName = telephony.simOperatorName?.takeIf { it.isNotBlank() },
                     cells = cells,
+                    carriers = carriers,
+                    signals = signals,
                     allowedMask = aospState?.takeIf { it.has("allowed") }?.optLong("allowed"),
                     supportedTypes = aospState?.takeIf { it.has("supportedTypes") }?.optLong("supportedTypes"),
                     netModeHeldBack = aospState?.optString("modeHeldBack")?.takeIf { it.isNotEmpty() },
@@ -653,6 +665,32 @@ class ModemController(
         } finally {
             updateState { copy(refreshing = false) }
         }
+    }
+
+    private suspend fun connectionCarriers(
+        sim: Int,
+        cells: List<Cell>,
+        signals: List<Signal>,
+    ): List<Carrier> {
+        val reported = runCatching { Carriers.fromReport(helper.call("aosp.carriers") { put("sim", sim) }.optJSONArray("carriers")) }
+        return Carriers.complete(reported.getOrDefault(emptyList()).ifEmpty { backendCarriers }, cells, signals)
+    }
+
+    suspend fun refreshConnection() {
+        if (!helper.running || current.refreshing || current.root != RootState.Granted) return
+        val sim = current.sim
+        val subscriptionId = subId()
+        if (current.backend == Backend.QUALCOMM) {
+            runCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()?.let { serving ->
+                backendCells = runCatching { Cells.fromQualcomm(serving) }.getOrDefault(backendCells)
+                backendCarriers = Carriers.fromReport(serving.optJSONArray("carriers"))
+            }
+        }
+        val cells = Cells.merge(backendCells, Cells.scan(context, subscriptionId, LIVE_CELL_SCAN_WAIT_MS))
+        val signals = Carriers.signals(context, subscriptionId)
+        val carriers = connectionCarriers(sim, cells, signals)
+        if (current.refreshing || current.sim != sim) return
+        updateState { copy(cells = cells, carriers = carriers, signals = signals) }
     }
 
     private fun withStrayBands(
@@ -669,25 +707,15 @@ class ModemController(
 
     private suspend fun loadSamsungNrMode(sim: Int): NrMode? {
         if (current.device?.samsungNrMode != true) return null
+        // 3 and 4 are temporary IMS states, and -1 is a failed read.
         val mode = runCatching { helper.call("samsung.nrMode") { put("sim", sim) }.optInt("mode", -1) }.getOrNull()
-        return when (mode) {
-            SAMSUNG_SA_NSA -> NrMode.BOTH
-            SAMSUNG_NSA_ONLY -> NrMode.NSA
-            SAMSUNG_SA_ONLY -> NrMode.SA
-            else -> null
-        }
+        return mode?.let { NrMode.entries.getOrNull(it) }
     }
 
     private suspend fun setSamsungNrMode(mode: NrMode) {
-        val samsungMode =
-            when (mode) {
-                NrMode.BOTH -> SAMSUNG_SA_NSA
-                NrMode.NSA -> SAMSUNG_NSA_ONLY
-                NrMode.SA -> SAMSUNG_SA_ONLY
-            }
         helper.call("samsung.setNrMode") {
             put("sim", current.sim)
-            put("mode", samsungMode)
+            put("mode", mode.ordinal)
         }
     }
 
@@ -714,6 +742,7 @@ class ModemController(
         groups += bandGroupState(Group.WCDMA, hardware.intList("wcdma"), qcState.intList("wcdma"))
         groups += bandGroupState(Group.GSM, hardware.intList("gsm"), qcState.intList("gsm"))
         val samsungNrMode = if (sim in samsungNrModeReadbackSims) loadSamsungNrMode(sim) else null
+        val serving = runCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()
         val manualSelection = qcState.optJSONObject("netSel")?.takeIf { it.optInt("mode") == QMI_NET_SEL_MANUAL }
         return BackendReadout(
             groups = groups,
@@ -722,7 +751,8 @@ class ModemController(
             nrLock = qcState.optJSONObject("nrLock")?.takeIf { it.optBoolean("active") }?.let(::qcNrLockLabel),
             plmnLock = manualSelection?.let { qcPlmnLabel(it, qcState.optJSONObject("manualPlmn"), sim) },
             plmnReported = qcState.has("netSel"),
-            cells = runCatching { Cells.fromQualcomm(helper.call("qc.serving") { put("sim", sim) }) }.getOrDefault(emptyList()),
+            cells = serving?.let { runCatching { Cells.fromQualcomm(it) }.getOrNull() }.orEmpty(),
+            carriers = Carriers.fromReport(serving?.optJSONArray("carriers")),
         )
     }
 

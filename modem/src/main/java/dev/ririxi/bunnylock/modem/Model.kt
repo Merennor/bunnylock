@@ -2,7 +2,9 @@ package dev.ririxi.bunnylock.modem
 
 import android.telephony.TelephonyManager
 import dev.ririxi.bunnylock.core.Bands
+import dev.ririxi.bunnylock.data.Carrier
 import dev.ririxi.bunnylock.data.Cell
+import dev.ririxi.bunnylock.data.Signal
 import org.json.JSONObject
 
 enum class Backend(
@@ -131,7 +133,7 @@ object Masks {
     }
 }
 
-/** The order is load-bearing: the Qualcomm backend sends the ordinal as QMI's 5G mode number. */
+/** QMI and Samsung both take the ordinal as the 5G mode number, so the order matters. */
 enum class NrMode(
     val label: String,
 ) {
@@ -281,6 +283,9 @@ data class ModemState(
     val nrMode: NrMode? = null,
     val nrDc: Boolean? = null,
     val cells: List<Cell> = emptyList(),
+    /** Primary first. */
+    val carriers: List<Carrier> = emptyList(),
+    val signals: List<Signal> = emptyList(),
     val lteLock: String? = null,
     val nrLock: String? = null,
     /** A 2G or 3G cell lock. bunnylock doesn't set these, but a MediaTek modem may hold one made elsewhere. */

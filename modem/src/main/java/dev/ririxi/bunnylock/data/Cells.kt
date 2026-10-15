@@ -23,6 +23,26 @@ import kotlin.coroutines.resume
 /** Declared oldest first: the cell list relies on this order to put newer technologies on top. */
 enum class Rat { GSM, WCDMA, LTE, NR }
 
+fun Rat.bandLabel(band: Int?): String =
+    when {
+        band === null -> "?"
+        this == Rat.NR -> "n$band"
+        this == Rat.LTE -> "B$band"
+        else -> "$band"
+    }
+
+fun Rat.frequencyName(band: Int?): String? =
+    band?.let { number ->
+        when (this) {
+            Rat.LTE -> Bands.LTE_FREQUENCY_NAMES[number]
+            Rat.NR -> Bands.NR_FREQUENCY_NAMES[number]
+            Rat.WCDMA -> Bands.WCDMA_FREQUENCY_NAMES[number]
+            Rat.GSM -> null
+        }
+    }
+
+internal fun Int.availableOrNull(): Int? = takeIf { it != CellInfo.UNAVAILABLE }
+
 data class Cell(
     val rat: Rat,
     val arfcn: Long,
@@ -38,17 +58,14 @@ data class Cell(
     /** MCC+MNC digits, e.g. "26201". Usually only known for the serving cell. */
     val plmn: String? = null,
     val operator: String? = null,
+    /** Only LTE cells report it, and usually only the serving one. */
+    val bandwidthKhz: Int? = null,
 ) {
     val key get() = "$rat:$arfcn:$pci"
 
-    val bandLabel: String
-        get() =
-            when {
-                band === null -> "?"
-                rat == Rat.NR -> "n$band"
-                rat == Rat.LTE -> "B$band"
-                else -> "$band"
-            }
+    val bandLabel get() = rat.bandLabel(band)
+
+    val frequencyName get() = rat.frequencyName(band)
 }
 
 object Cells {
@@ -64,11 +81,12 @@ object Cells {
     suspend fun scan(
         context: Context,
         subId: Int,
+        freshWaitMs: Long = 4000,
     ): List<Cell> {
         val defaultTelephony = context.getSystemService(TelephonyManager::class.java) ?: return emptyList()
         val telephony = if (subId >= 0) defaultTelephony.createForSubscriptionId(subId) else defaultTelephony
         // The refresh callback isn't guaranteed to arrive, so the wait is capped and Android's cached list is used instead.
-        val cellInfos = withTimeoutOrNull(4000) { freshCellInfo(telephony) } ?: cachedCellInfo(telephony)
+        val cellInfos = withTimeoutOrNull(freshWaitMs) { freshCellInfo(telephony) } ?: cachedCellInfo(telephony)
         return cellInfos.mapNotNull(::toCell)
     }
 
@@ -100,8 +118,6 @@ object Cells {
     private fun cachedCellInfo(telephony: TelephonyManager): List<CellInfo> =
         runCatching { telephony.allCellInfo }.getOrNull() ?: emptyList()
 
-    private fun Int.availableOrNull(): Int? = takeIf { it != CellInfo.UNAVAILABLE }
-
     private fun plmnOf(
         mcc: String?,
         mnc: String?,
@@ -122,12 +138,12 @@ object Cells {
     }
 
     // Some radio HALs report a wrong band (e.g. n1 for an n78 ARFCN), so the ARFCN table wins on disagreement.
-    private fun lteBand(
+    internal fun lteBand(
         reported: IntArray,
         earfcn: Int,
     ): Int? = Bands.lteBandOf(earfcn) ?: reported.firstOrNull()
 
-    private fun nrBand(
+    internal fun nrBand(
         reported: IntArray,
         arfcn: Int,
     ): Int? {
@@ -156,6 +172,7 @@ object Cells {
             registered = info.isRegistered,
             rsrp = info.cellSignalStrength.rsrp.availableOrNull(),
             source = "android",
+            bandwidthKhz = identity.bandwidth.availableOrNull(),
         )
     }
 
@@ -278,6 +295,7 @@ object Cells {
                 band = earlier.band ?: cell.band,
                 plmn = earlier.plmn ?: cell.plmn,
                 operator = earlier.operator ?: cell.operator,
+                bandwidthKhz = earlier.bandwidthKhz ?: cell.bandwidthKhz,
             ) ?: cell
         }
         return byKey.values.sortedWith(displayOrder)

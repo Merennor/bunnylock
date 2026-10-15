@@ -92,6 +92,11 @@ private val LockGreenOnDark = Color(0xFF5BE584)
 
 val LocalLockGreen = staticCompositionLocalOf { LockGreenOnLight }
 
+private val SignalScaleOnLight = listOf(LockGreenOnLight, Color(0xFF6E8E00), Color(0xFFB86E00), Color(0xFFCC3B2C))
+private val SignalScaleOnDark = listOf(LockGreenOnDark, Color(0xFFC3E35A), Color(0xFFFFB95C), Color(0xFFFF8A7E))
+
+val LocalSignalScale = staticCompositionLocalOf { SignalScaleOnLight }
+
 val dynamicColorAvailable: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -109,7 +114,10 @@ fun BunnyTheme(
             darkTheme -> DarkColors
             else -> LightColors
         }
-    CompositionLocalProvider(LocalLockGreen provides if (darkTheme) LockGreenOnDark else LockGreenOnLight) {
+    CompositionLocalProvider(
+        LocalLockGreen provides if (darkTheme) LockGreenOnDark else LockGreenOnLight,
+        LocalSignalScale provides if (darkTheme) SignalScaleOnDark else SignalScaleOnLight,
+    ) {
         MaterialExpressiveTheme(
             colorScheme = scheme,
             motionScheme = MotionScheme.expressive(),

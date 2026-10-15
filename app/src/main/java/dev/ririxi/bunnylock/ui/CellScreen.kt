@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.ririxi.bunnylock.core.Bands
+import dev.ririxi.bunnylock.data.Cell
 import dev.ririxi.bunnylock.data.Rat
 import dev.ririxi.bunnylock.modem.Backend
 import dev.ririxi.bunnylock.modem.Group
@@ -94,7 +95,10 @@ fun CellScreen(
         }
 
         item {
-            val lockableCells = state.modem.cells.filter { it.rat == Rat.LTE || it.rat == Rat.NR }
+            val lockableCells =
+                state.modem.cells
+                    .filter { it.rat == Rat.LTE || it.rat == Rat.NR }
+                    .sortedWith(compareByDescending<Cell> { it.registered }.thenByDescending { it.rat.ordinal }.thenBy { it.arfcn }.thenBy { it.pci })
             SectionHeader("Visible cells (tap one to fill in)")
             if (lockableCells.isEmpty()) {
                 Panel { SleepyBunny("No cells found", "Cell scans need location access.") }

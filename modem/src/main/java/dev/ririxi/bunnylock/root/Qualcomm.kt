@@ -26,6 +26,7 @@ object Qualcomm {
     private const val NAS_GET_CELL_LOCATION_INFO = 0x0043
     private const val NAS_BIND_SUBSCRIPTION = 0x0045
     private const val NAS_GET_SYS_INFO = 0x004D
+    private const val NAS_GET_LTE_CPHY_CA_INFO = 0x00AC
     private const val NAS_LTE_LOCK_GET = 0x00D7
     private const val NAS_LTE_LOCK_SET = 0x00D8
     private const val NAS_NR_LOCK_SET = 0x010E
@@ -98,6 +99,20 @@ object Qualcomm {
     private const val TLV_CELL_LOCATION_LTE_INTER_EARFCNS = 0x28
     private const val TLV_CELL_LOCATION_NR_ARFCN = 0x2E
     private const val TLV_CELL_LOCATION_NR_CELL = 0x2F
+
+    // NAS_GET_LTE_CPHY_CA_INFO
+    private const val TLV_CA_SCELL = 0x12
+    private const val TLV_CA_PCELL = 0x13
+    private const val TLV_CA_SCELLS = 0x15
+    private const val CA_SCELL_ACTIVATED = 2
+
+    /** In kHz, indexed by QMI's bandwidth enum. */
+    private val CA_BANDWIDTHS_KHZ = listOf(1400, 3000, 5000, 10_000, 15_000, 20_000)
+
+    /** The LTE bands QMI numbers from 120 up. */
+    private val QMI_LTE_BANDS =
+        (1..14) + 17 + (33..40) + (18..21) + listOf(24, 25, 41, 42, 43, 23, 26, 32, 125, 126, 127, 28, 29, 30, 66, 250, 46, 27, 31, 47, 48, 71)
+    private const val QMI_FIRST_LTE_BAND = 120
 
     // NAS_GET_RF_BAND_INFO
     private const val TLV_RF_BAND_INFO_LIST = 0x01
@@ -656,6 +671,7 @@ object Qualcomm {
             runCatching { putSysInfo(client, out) }
             runCatching { putCellLocation(client, out) }
             runCatching { putRfBandInfo(client, out) }
+            runCatching { putCarrierAggregation(client, out) }
             out.optJSONObject("nr")?.let { nr ->
                 val arfcn = nr.optLong("arfcn", -1)
                 if (arfcn > 0) nr.put("bands", JSONArray(Bands.nrBandsOf(arfcn.toInt())))
@@ -821,6 +837,63 @@ object Qualcomm {
             }
         }
         out.put("rf", bands)
+    }
+
+    /** The field is 16 bits, so EARFCNs from 65536 up (bands 66 and 71) arrive cut short. */
+    private fun caEarfcn(
+        channel: Int,
+        band: Int?,
+    ): Long {
+        if (band === null) return channel.toLong()
+        return listOf(channel.toLong(), channel + 0x10000L).firstOrNull { Bands.lteBandOf(it.toInt()) == band } ?: channel.toLong()
+    }
+
+    private fun caCarrier(
+        reader: Reader,
+        primary: Boolean,
+    ): JSONObject {
+        val pci = reader.u16()
+        val channel = reader.u16()
+        val bandwidth = CA_BANDWIDTHS_KHZ.getOrNull(reader.i32())
+        val band = QMI_LTE_BANDS.getOrNull(reader.u16() - QMI_FIRST_LTE_BAND)
+        val carrier =
+            JSONObject()
+                .put("rat", "LTE")
+                .put("primary", primary)
+                .put("pci", pci)
+                .put("channel", caEarfcn(channel, band))
+        band?.let { carrier.put("band", it) }
+        bandwidth?.let { carrier.put("bandwidth", it) }
+        return carrier
+    }
+
+    /** QMI leaves 5G NSA carriers out of this report. */
+    private fun putCarrierAggregation(
+        client: QmiClient,
+        out: JSONObject,
+    ) {
+        val response = client.send(NAS_GET_LTE_CPHY_CA_INFO)
+        if (!response.ok) return
+        val pcell = response.tlv(TLV_CA_PCELL) ?: return
+        val carriers = JSONArray().put(caCarrier(Reader(pcell), primary = true))
+        val scellList = response.tlv(TLV_CA_SCELLS)
+        if (scellList !== null) {
+            val reader = Reader(scellList)
+            repeat(reader.u8()) {
+                val scell = caCarrier(reader, primary = false)
+                val state = reader.i32()
+                // The cell index.
+                reader.skip(1)
+                if (state == CA_SCELL_ACTIVATED) carriers.put(scell)
+            }
+        } else {
+            response.tlv(TLV_CA_SCELL)?.let { value ->
+                val reader = Reader(value)
+                val scell = caCarrier(reader, primary = false)
+                if (reader.i32() == CA_SCELL_ACTIVATED) carriers.put(scell)
+            }
+        }
+        out.put("carriers", carriers)
     }
 
     /**

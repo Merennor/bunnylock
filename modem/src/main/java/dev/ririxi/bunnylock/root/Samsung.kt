@@ -8,7 +8,7 @@ import java.lang.reflect.Method
 
 /**
  * Samsung's ISemTelephony ("isemtelephony"): 5G mode on One UI without root.
- * Modes (Samsung VolteConstants.NR_MODE): 0 SA only, 1 NSA only, 2 SA + NSA.
+ * Modes (TelephonyManager.SEM_NR_MODE_*): 0 SA + NSA, 1 NSA only, 2 SA only. Samsung's IMS constants have 0 and 2 swapped.
  */
 object Samsung {
     private class SemTelephony(
