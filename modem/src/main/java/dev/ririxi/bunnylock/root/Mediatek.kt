@@ -1,6 +1,7 @@
 package dev.ririxi.bunnylock.root
 
 import dev.ririxi.bunnylock.core.Bands
+import dev.ririxi.bunnylock.modem.Masks
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -12,6 +13,7 @@ import java.io.IOException
  *  - AT+EMMCHLCK=<on>,<act>,<gsm1900>,<arfcn>[,<pci>[,<mode>]] : channel / cell lock
  *    act: 0 GSM, 2 UMTS, 7 LTE, 11 NR
  *    mode: 0 idle only, 3 idle + connected
+ *  - AT+ERAT=<rat>,<prefer> : network mode
  */
 object Mediatek {
     val CANDIDATES =
@@ -45,6 +47,38 @@ object Mediatek {
 
     /** Bit of each GSM band, by its MHz name, in the GSM word. */
     private val GSM_BITS = mapOf(900 to 1, 1800 to 3, 1900 to 4, 850 to 7)
+
+    private val GENERATIONS = Masks.G2 or Masks.G3 or Masks.G4 or Masks.G5
+
+    // The modes with C2K are only read, never set.
+    private val ERAT_MASKS =
+        mapOf(
+            0 to Masks.G2,
+            1 to Masks.G3,
+            2 to (Masks.G2 or Masks.G3),
+            3 to Masks.G4,
+            4 to (Masks.G2 or Masks.G4),
+            5 to (Masks.G3 or Masks.G4),
+            6 to (Masks.G2 or Masks.G3 or Masks.G4),
+            15 to Masks.G5,
+            19 to (Masks.G4 or Masks.G5),
+            21 to (Masks.G3 or Masks.G4 or Masks.G5),
+            22 to (Masks.G2 or Masks.G3 or Masks.G4 or Masks.G5),
+            7 to Masks.CDMA,
+            8 to (Masks.G2 or Masks.CDMA),
+            10 to (Masks.G2 or Masks.G3 or Masks.CDMA),
+            11 to (Masks.G4 or Masks.CDMA),
+            12 to (Masks.G2 or Masks.G4 or Masks.CDMA),
+            14 to (Masks.G2 or Masks.G3 or Masks.G4 or Masks.CDMA),
+            26 to (Masks.G4 or Masks.G5 or Masks.CDMA),
+            30 to (Masks.G2 or Masks.G3 or Masks.G4 or Masks.G5 or Masks.CDMA),
+        )
+
+    // The <prefer> values MediaTek's RIL sends.
+    private const val ERAT_PREFER_NONE = 0
+    private const val ERAT_PREFER_3G = 2
+    private const val ERAT_PREFER_LTE = 4
+    private const val ERAT_PREFER_NR = 128
 
     fun probe(node: String): Boolean = runCatching { At.send(node, "AT", 1500).lines().any { it == "OK" } }.getOrDefault(false)
 
@@ -135,6 +169,39 @@ object Mediatek {
         }
         nrWordsOf(currentHex)?.let { out.optJSONObject("current")?.put("nr", JSONArray(Bands.fromWords(it))) }
         runCatching { out.put("cellLock", cellLockState(node)) }
+        runCatching { ratMask(node)?.let { out.put("ratMask", it) } }
+        return out
+    }
+
+    private fun ratMask(node: String): Long? {
+        // +ERAT: <current rat>,<gprs status>,<rat>,<prefer>
+        val line = At.send(node, "AT+ERAT?").lines().firstOrNull { it.startsWith("+ERAT:") } ?: return null
+        val rat = line.removePrefix("+ERAT:").split(',').getOrNull(2)?.trim()?.toIntOrNull() ?: return null
+        return ERAT_MASKS[rat]
+    }
+
+    private fun preferenceFor(generations: Long): Int =
+        when {
+            generations == Masks.G5 -> ERAT_PREFER_NONE
+            generations and Masks.G5 != 0L -> ERAT_PREFER_NR
+            generations == Masks.G2 or Masks.G3 or Masks.G4 -> ERAT_PREFER_LTE
+            generations == Masks.G2 or Masks.G3 -> ERAT_PREFER_3G
+            else -> ERAT_PREFER_NONE
+        }
+
+    /** A modem that already allows the same generations is left alone. */
+    fun setRat(
+        node: String,
+        mask: Long,
+    ): JSONObject {
+        val wanted = mask and GENERATIONS
+        val current = ratMask(node) ?: throw IOException("The modem didn't report its network mode.")
+        if (current and GENERATIONS != wanted) {
+            val rat = ERAT_MASKS.entries.firstOrNull { it.value == wanted }?.key ?: throw IOException("AT+ERAT has no mode for that combination.")
+            At.ok(node, "AT+ERAT=$rat,${preferenceFor(wanted)}")
+        }
+        val out = JSONObject()
+        ratMask(node)?.let { out.put("ratMask", it) }
         return out
     }
 

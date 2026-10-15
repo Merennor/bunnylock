@@ -184,6 +184,8 @@ object RootServer {
 
             "mtk.cellUnlock" -> Mediatek.cellUnlock(request.getString("node"))
 
+            "mtk.setRat" -> Mediatek.setRat(request.getString("node"), request.getLong("mask"))
+
             "pixel.state" -> Pixel.state(sim)
 
             "pixel.setLte" -> Pixel.setLte(request.ints("bands"))

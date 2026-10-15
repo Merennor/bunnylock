@@ -139,7 +139,7 @@ object Carriers {
         val serving = if (leadsItsNetwork) agreeing.firstOrNull { it.registered } else null
         return when {
             carrier.arfcn !== null && carrier.pci !== null -> agreeing.firstOrNull()
-            carrier.arfcn !== null || carrier.pci !== null -> serving ?: agreeing.singleOrNull()
+            carrier.arfcn !== null || carrier.pci !== null -> serving ?: agreeing.singleOrNull { !it.registered }
             else -> serving
         }
     }

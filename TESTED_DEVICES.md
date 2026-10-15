@@ -20,7 +20,8 @@ Without root, bunnylock runs through Shizuku. Some MediaTek phones allow AT comm
 | ----------------------------- | :-----: | ------- | ----------------- | :--: | :---: | :-: | :-: | --------------------------------------------------------------------------------------------------------- |
 | Google Pixel 6 Pro            |   17    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Google Pixel 10               |   17    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
-| Motorola Moto E22             |   13    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  |                                                                                                           |
+| Motorola G54 5G               |   15    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  |                                                                                                           |
+| Motorola Moto E22             |   13    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |
 | OnePlus Nord CE5              |   16    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |
 | Oppo A74 5G                   |   13    | Shizuku | Android radio HAL |  ✅  |  ❌   | ✅  | ❌  |                                                                                                           |
 | Oppo Find X9 Pro              |   16    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |

@@ -46,6 +46,7 @@ private data class BackendReadout(
     val plmnReported: Boolean = false,
     val cells: List<Cell> = emptyList(),
     val carriers: List<Carrier> = emptyList(),
+    val allowedMask: Long? = null,
 )
 
 private const val MAX_HAL_CHANNELS = 32
@@ -655,7 +656,7 @@ class ModemController(
                     cells = cells,
                     carriers = carriers,
                     signals = signals,
-                    allowedMask = aospState?.takeIf { it.has("allowed") }?.optLong("allowed"),
+                    allowedMask = modem.allowedMask ?: aospState?.takeIf { it.has("allowed") }?.optLong("allowed"),
                     supportedTypes = aospState?.takeIf { it.has("supportedTypes") }?.optLong("supportedTypes"),
                     netModeHeldBack = aospState?.optString("modeHeldBack")?.takeIf { it.isNotEmpty() },
                     netModeMasks = aospState?.optString("modeMasks")?.takeIf { it.isNotEmpty() },
@@ -857,6 +858,8 @@ class ModemController(
         }
         groups += bandGroupState(Group.WCDMA, supported.intList("wcdma"), current.intList("wcdma"))
         groups += bandGroupState(Group.GSM, supported.intList("gsm"), current.intList("gsm"))
+        // While Android holds part of the mode back, its mask stays, so the note can explain the difference.
+        val allowedMask = mtkState.takeIf { it.has("ratMask") && aospState?.has("modeHeldBack") != true }?.optLong("ratMask")
         // A modem that refuses AT+EMMCHLCK gets its cell lock through the radio HAL, so the lock is read from there too.
         val cellLockState = mtkState.optJSONObject("cellLock")
         if (cellLockState?.optBoolean("refused") == true || mtkCellLockIgnored) {
@@ -866,6 +869,7 @@ class ModemController(
                 lteLock = channelLock(specs, Ran.EUTRAN),
                 nrLock = channelLock(specs, Ran.NGRAN),
                 mtkCellLockRefused = true,
+                allowedMask = allowedMask,
             )
         }
         val cellLock = cellLockState?.takeIf { it.optBoolean("active") }
@@ -879,6 +883,7 @@ class ModemController(
             lteLock = lockLabel.takeIf { !nrLocked && !legacyLocked },
             nrLock = lockLabel.takeIf { nrLocked },
             legacyCellLock = lockLabel.takeIf { legacyLocked },
+            allowedMask = allowedMask,
         )
     }
 
@@ -1215,15 +1220,33 @@ class ModemController(
                         put("slot", current.sim - 1)
                     }
                 } catch (e: Exception) {
-                    if (current.backend != Backend.QUALCOMM) throw e
-                    helper.call("qc.setRat") {
-                        put("sim", current.sim)
-                        put("mask", Masks.toQmi(mask))
-                        put("persist", current.persist)
+                    when (current.backend) {
+                        Backend.QUALCOMM ->
+                            helper.call("qc.setRat") {
+                                put("sim", current.sim)
+                                put("mask", Masks.toQmi(mask))
+                                put("persist", current.persist)
+                            }
+
+                        Backend.MEDIATEK -> {
+                            try {
+                                callMediatek("mtk.setRat") { put("mask", mask) }
+                            } catch (atError: Exception) {
+                                log("AT+ERAT didn't set the network mode either (${reason(atError).asClause()}).")
+                                throw e
+                            }
+                            log("Android refused the network mode (${reason(e).asClause()}), so bunnylock set it with AT+ERAT.")
+                            JSONObject().put("setByAt", true)
+                        }
+
+                        else -> throw e
                     }
                 }
+            // MediaTek's RIL skips a mode it thinks is already set, and it doesn't see one set with AT+ERAT.
+            if (current.backend == Backend.MEDIATEK && !result.optBoolean("setByAt")) runCatching { callMediatek("mtk.setRat") { put("mask", mask) } }
             val notes =
                 buildList {
+                    if (result.optBoolean("setByAt")) add("Android refused it, so bunnylock set it on the modem directly. It lasts until the phone restarts.")
                     if (result.optBoolean("airplaneMode")) add("The modem only switches modes with the radio off, so airplane mode came on for a moment.")
                     val heldBack = result.optString("heldBack")
                     if (heldBack.isNotEmpty()) add("$heldBack The mode stays set and applies in full once that changes.")

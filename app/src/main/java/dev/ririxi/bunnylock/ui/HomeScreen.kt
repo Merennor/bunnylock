@@ -471,7 +471,7 @@ private fun CarrierItem(
 ) = RadioRow(
     shapes,
     carrier.rat,
-    carrier.bandLabel,
+    if (carrier.band !== null) carrier.bandLabel else "Unknown band",
     carrier.frequencyName,
     radioDetails(carrier.rat, carrier.arfcn, carrier.pci, carrier.bandwidthKhz),
     carrier.rsrp,
