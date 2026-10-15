@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/banner.png" alt="bunnylock" width="640">
+  <img src=".github/banner-readme.png" alt="bunnylock">
 </p>
 
 bunnylock is an Android app for band, RAT, and cell locking. It talks to the modem through root or Shizuku and picks the best backend available on the phone.
