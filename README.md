@@ -95,3 +95,17 @@ On Linux or macOS:
 ```
 
 The APK is written to `app/build/outputs/apk/release/app-release.apk`
+
+### Signing
+
+By default, release builds are signed with your machine's debug key. To use your own key, create `keystore.properties` in the project root.
+
+```properties
+storeFile=C:/keys/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+lineageFile=C:/keys/lineage.bin
+```
+
+`lineageFile` is optional. It points to a lineage made with `apksigner rotate`, which lets builds signed with the new key update installs signed with an older one.

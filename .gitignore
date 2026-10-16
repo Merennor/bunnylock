@@ -11,3 +11,6 @@
 /modem/.cxx/
 /captures/
 .externalNativeBuild/
+/keystore.properties
+*.jks
+*.keystore
