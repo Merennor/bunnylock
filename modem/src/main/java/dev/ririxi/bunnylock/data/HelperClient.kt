@@ -1,6 +1,7 @@
 package dev.ririxi.bunnylock.data
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -13,6 +14,8 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Runs RootServer in app_process inside a shell and talks JSON to it.
@@ -60,10 +63,15 @@ abstract class HelperClient(
 
             val hello =
                 try {
-                    withTimeout(20_000) { ready.await() }
+                    withTimeout(20.seconds) { ready.await() }
+                } catch (_: TimeoutCancellationException) {
+                    shell.destroy()
+                    throw RootException(startTimedOut)
+                } catch (e: CancellationException) {
+                    shell.destroy()
+                    throw e
                 } catch (e: Exception) {
                     shell.destroy()
-                    if (e is TimeoutCancellationException) throw RootException(startTimedOut)
                     throw RootException(e.message ?: startFailed)
                 }
             process = shell
@@ -104,7 +112,7 @@ abstract class HelperClient(
 
     override suspend fun call(
         cmd: String,
-        timeoutMs: Long,
+        timeout: Duration,
         build: JSONObject.() -> Unit,
     ): JSONObject {
         val helperStdin = writer ?: throw RootException("The $name isn't running.")
@@ -122,7 +130,7 @@ abstract class HelperClient(
                         helperStdin.flush()
                     }
                 }
-                withTimeout(timeoutMs) { reply.await() }
+                withTimeout(timeout) { reply.await() }
             } catch (_: TimeoutCancellationException) {
                 throw RootException("The $name didn't answer in time.")
             } catch (_: IOException) {

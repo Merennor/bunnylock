@@ -367,15 +367,24 @@ object Bands {
             LteRange(106, 935.0, 70656, 70705),
         )
 
-    private fun lteRangeOf(earfcn: Int): LteRange? = lteDownlinkRanges.firstOrNull { earfcn in it.firstEarfcn..it.lastEarfcn }
+    private fun lteRangeOf(earfcn: Int): LteRange? =
+        lteDownlinkRanges.firstOrNull { earfcn in it.firstEarfcn..it.lastEarfcn }
 
     fun lteBandOf(earfcn: Int): Int? = lteRangeOf(earfcn)?.band
 
-    fun lteFreqMhz(earfcn: Int): Double? = lteRangeOf(earfcn)?.let { it.lowestDownlinkMhz + 0.1 * (earfcn - it.firstEarfcn) }
+    fun lteFreqMhz(earfcn: Int): Double? =
+        lteRangeOf(earfcn)?.let { it.lowestDownlinkMhz + 0.1 * (earfcn - it.firstEarfcn) }
 
     // Bands that overlap with the same duplex spacing, so a cell in one can be camped on as another (36.331 multiBandInfoList).
     private val lteOverlappingBandGroups =
-        listOf(listOf(2, 25), listOf(4, 66), listOf(5, 18, 19, 26), listOf(12, 17, 85), listOf(38, 41), listOf(42, 43, 48))
+        listOf(
+            listOf(2, 25),
+            listOf(4, 66),
+            listOf(5, 18, 19, 26),
+            listOf(12, 17, 85),
+            listOf(38, 41),
+            listOf(42, 43, 48)
+        )
 
     /** The bands a phone can use this EARFCN's cell as: its own, plus any that share cells with it at this frequency. */
     fun lteBandsAt(earfcn: Int): List<Int> {
@@ -469,6 +478,48 @@ object Bands {
     /** Most common band first. */
     fun nrBandsOf(arfcn: Int): List<Int> =
         nrDownlinkRanges.filter { arfcn in it.firstArfcn..it.lastArfcn }.map { it.band }.sortedBy(::nrPreferenceRank)
+
+    private data class ChannelRange(
+        val band: Int,
+        val channels: IntRange,
+    )
+
+    private val wcdmaDownlinkRanges =
+        listOf(
+            ChannelRange(1, 10562..10838),
+            ChannelRange(2, 9662..9938),
+            ChannelRange(3, 1162..1513),
+            ChannelRange(4, 1537..1738),
+            ChannelRange(5, 4357..4458),
+            ChannelRange(6, 4387..4413),
+            ChannelRange(7, 2237..2563),
+            ChannelRange(8, 2937..3088),
+            ChannelRange(9, 9237..9387),
+            ChannelRange(10, 3112..3388),
+            ChannelRange(11, 3712..3787),
+            ChannelRange(12, 3842..3903),
+            ChannelRange(13, 4017..4043),
+            ChannelRange(14, 4117..4143),
+            ChannelRange(19, 712..763),
+            ChannelRange(20, 4512..4638),
+            ChannelRange(21, 862..912),
+            ChannelRange(22, 4662..5038),
+            ChannelRange(25, 5112..5413),
+        )
+
+    private val gsmRanges =
+        listOf(
+            ChannelRange(850, 128..251),
+            ChannelRange(900, 0..124),
+            ChannelRange(900, 955..1023),
+            ChannelRange(1800, 512..885),
+            ChannelRange(1900, 512..810),
+        )
+
+    /** Band 6 lies inside band 5, so band 5 comes first. */
+    fun wcdmaBandsAt(uarfcn: Int): List<Int> = wcdmaDownlinkRanges.filter { uarfcn in it.channels }.map { it.band }
+
+    fun gsmBandsAt(arfcn: Int): List<Int> = gsmRanges.filter { arfcn in it.channels }.map { it.band }.distinct()
 
     // 3GPP TS 38.104 table 5.4.2.1-1: the raster is 5 kHz below 3 GHz, 15 kHz from there to 24.25 GHz and 60 kHz above.
     fun nrFreqMhz(arfcn: Int): Double =

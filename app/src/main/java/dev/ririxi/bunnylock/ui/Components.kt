@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.animation.animateColorAsState
@@ -96,7 +98,6 @@ fun Wordmark(
     )
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SectionHeader(
     text: String,
@@ -127,7 +128,6 @@ class SegmentScope {
  * A group of list rows with a small gap between them. The rows are collected first because each one's
  * [ListItemShapes] depend on its position: only the outer corners of the group are fully rounded.
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun Segmented(
     modifier: Modifier = Modifier,
@@ -152,7 +152,6 @@ fun Panel(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun InfoItem(
     shapes: ListItemShapes,
@@ -177,7 +176,6 @@ fun InfoItem(
 
 private const val MAX_TRAILING_VALUE_LENGTH = 22
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun <T> ConnectedChoice(
     options: List<T>,
@@ -207,7 +205,6 @@ fun <T> ConnectedChoice(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun <T> ToggleGrid(
     options: List<T>,

@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.animation.AnimatedVisibility
@@ -23,7 +25,6 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,7 +56,6 @@ import dev.ririxi.bunnylock.ui.theme.dynamicColorAvailable
 
 private val AT_COMMAND_PRESETS = listOf("ATI", "AT+EPBSE?", "AT+EPBSEH?", "AT+EMMCHLCK?", "AT+GOOGGETNV=\"NR.CONFIG.MODE\"")
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ToolsScreen(
     state: UiState,
@@ -359,7 +359,6 @@ private val BUNNY_FACTS =
 
 private const val TAPS_FOR_FACT = 5
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun About() {
     val context = LocalContext.current
@@ -411,7 +410,6 @@ private fun atNodesHint(device: DeviceInfo?): String {
     return if (nodes.isEmpty()) "No AT ports found." else "Found ${andList(nodes)}."
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ActionItem(
     shapes: ListItemShapes,
@@ -431,7 +429,6 @@ private fun ActionItem(
     ) { Text(title) }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SwitchItem(
     shapes: ListItemShapes,

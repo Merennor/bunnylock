@@ -8,6 +8,7 @@ import org.json.JSONObject
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.PrintStream
+import kotlin.system.exitProcess
 
 /**
  * Started via su as:
@@ -42,7 +43,7 @@ object RootServer {
             if (command == "exit") break
             protocolOut.println(respond(line))
         }
-        System.exit(0)
+        exitProcess(0)
     }
 
     private var libError: Throwable? = null
@@ -102,6 +103,8 @@ object RootServer {
             "aosp.carriers" -> PhysicalChannels.report(simSlot)
 
             "aosp.setAllowed" -> Aosp.setAllowed(subId, request.getLong("mask"), request.optInt("slot", simSlot))
+
+            "aosp.reapplyAllowed" -> Aosp.reapplyAllowed(subId, request.getLong("mask"))
 
             "aosp.setNrDc" -> Aosp.setNrDc(subId, request.getInt("state"))
 

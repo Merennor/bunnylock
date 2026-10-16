@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.animation.AnimatedContent
@@ -26,7 +28,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItemShapes
@@ -106,7 +107,6 @@ fun HomeScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun Hero(
     state: UiState,
@@ -285,7 +285,6 @@ private fun ratColor(rat: Rat): Color =
         Rat.GSM -> MaterialTheme.colorScheme.outline
     }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ConnectionCard(modem: ModemState) {
     val carriers = modem.carriers
@@ -349,7 +348,6 @@ private fun SignalRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun Metric(
     label: String,
@@ -373,7 +371,6 @@ private fun Tag(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SignalPill(
     dbm: Int,
@@ -419,7 +416,6 @@ private fun radioDetails(
         bandwidthKhz?.let { "${megahertz(it)} MHz" },
     ).joinToString(" · ")
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RadioRow(
     shapes: ListItemShapes,

@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
@@ -34,7 +35,6 @@ import dev.ririxi.bunnylock.modem.Backend
 import dev.ririxi.bunnylock.modem.BandGroupState
 import dev.ririxi.bunnylock.modem.NrMode
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BandsScreen(
     state: UiState,
@@ -175,7 +175,6 @@ private fun selectionSummary(
         if (selected != bandGroup.allowed) append(", not applied yet")
     }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BandGroup(
     bandGroup: BandGroupState,

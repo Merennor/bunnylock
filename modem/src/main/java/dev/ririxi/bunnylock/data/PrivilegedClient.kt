@@ -1,6 +1,8 @@
 package dev.ririxi.bunnylock.data
 
 import org.json.JSONObject
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** The helper couldn't be started or reached, or it refused a command. Despite the name, the Shizuku client throws it too. */
 class RootException(
@@ -15,11 +17,11 @@ interface PrivilegedClient {
 
     /**
      * Sends [cmd] with the fields that [build] adds to the request and returns the "data" object of the helper's reply.
-     * Throws [RootException] when the helper reports an error or doesn't answer within [timeoutMs].
+     * Throws [RootException] when the helper reports an error or doesn't answer within [timeout].
      */
     suspend fun call(
         cmd: String,
-        timeoutMs: Long = 20_000,
+        timeout: Duration = 20.seconds,
         build: JSONObject.() -> Unit = {},
     ): JSONObject
 

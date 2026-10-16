@@ -26,7 +26,7 @@ class OemCallback(
         runCatching { callbackInterface.getField("DESCRIPTOR").get(null) as String }.getOrDefault(callbackInterface.name)
 
     private val methodsByCode: Map<Int, Method> by lazy {
-        val stub = runCatching { Class.forName("${callbackInterface.name}\$Stub", false, callbackInterface.classLoader) }.getOrNull()
+        val stub = runCatching { Class.forName($$"$${callbackInterface.name}$Stub", false, callbackInterface.classLoader) }.getOrNull()
         callbackInterface.methods
             .mapNotNull { method ->
                 val code = stub?.let { transactionCode(it, method) }

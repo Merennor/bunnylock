@@ -123,7 +123,10 @@ object Carriers {
         }
     }
 
-    /** Without a channel or PCI, a carrier can only be matched to the serving cell. */
+    /**
+     * Without a channel or PCI, a carrier can only be matched to the serving cell. Android often doesn't mark the 5G NSA
+     * cell as registered, so when a network has just one cell, that one counts.
+     */
     private fun cellOf(
         carrier: Carrier,
         cells: List<Cell>,
@@ -133,10 +136,10 @@ object Carriers {
             cells.filter { cell ->
                 cell.rat == carrier.rat &&
                     (carrier.arfcn === null || cell.arfcn == carrier.arfcn) &&
-                    (carrier.pci === null || cell.pci == carrier.pci) &&
+                    (carrier.pci === null || cell.pci < 0 || cell.pci == carrier.pci) &&
                     (carrier.band === null || cell.band === null || cell.band == carrier.band)
             }
-        val serving = if (leadsItsNetwork) agreeing.firstOrNull { it.registered } else null
+        val serving = if (leadsItsNetwork) agreeing.firstOrNull { it.registered } ?: agreeing.singleOrNull() else null
         return when {
             carrier.arfcn !== null && carrier.pci !== null -> agreeing.firstOrNull()
             carrier.arfcn !== null || carrier.pci !== null -> serving ?: agreeing.singleOrNull { !it.registered }

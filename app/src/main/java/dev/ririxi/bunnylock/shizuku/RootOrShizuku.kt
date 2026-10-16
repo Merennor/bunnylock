@@ -7,6 +7,7 @@ import dev.ririxi.bunnylock.modem.Access
 import dev.ririxi.bunnylock.modem.HelperStarter
 import dev.ririxi.bunnylock.modem.StartedHelper
 import dev.ririxi.bunnylock.modem.asClause
+import kotlinx.coroutines.CancellationException
 
 class RootOrShizuku(
     private val context: Context,
@@ -18,6 +19,8 @@ class RootOrShizuku(
         val rootError =
             try {
                 return StartedHelper(rootClient, rootClient.start(), Access.ROOT)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 e.message?.asClause() ?: "root access was denied"
             }
@@ -36,6 +39,9 @@ class RootOrShizuku(
         val hello =
             try {
                 shizukuClient.start()
+            } catch (e: CancellationException) {
+                shizukuClient.stop()
+                throw e
             } catch (e: Exception) {
                 shizukuClient.stop()
                 throw RootException(

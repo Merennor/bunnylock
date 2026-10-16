@@ -17,8 +17,11 @@ import dev.ririxi.bunnylock.core.Bands
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** Declared oldest first: the cell list relies on this order to put newer technologies on top. */
 enum class Rat { GSM, WCDMA, LTE, NR }
@@ -27,7 +30,7 @@ fun Rat.bandLabel(band: Int?): String =
     when {
         band === null -> "?"
         this == Rat.NR -> "n$band"
-        this == Rat.LTE -> "B$band"
+        this == Rat.LTE || this == Rat.WCDMA -> "B$band"
         else -> "$band"
     }
 
@@ -46,7 +49,7 @@ internal fun Int.availableOrNull(): Int? = takeIf { it != CellInfo.UNAVAILABLE }
 data class Cell(
     val rat: Rat,
     val arfcn: Long,
-    /** Physical cell id for LTE and NR. For WCDMA it is the PSC and for GSM the BSIC, or -1 when those are unknown. */
+    /** Physical cell id for LTE and NR. For WCDMA it is the PSC and for GSM the BSIC. -1 when unknown. */
     val pci: Int,
     val band: Int?,
     val registered: Boolean,
@@ -81,17 +84,21 @@ object Cells {
     suspend fun scan(
         context: Context,
         subId: Int,
-        freshWaitMs: Long = 4000,
+        freshWait: Duration = 4.seconds,
     ): List<Cell> {
         val defaultTelephony = context.getSystemService(TelephonyManager::class.java) ?: return emptyList()
         val telephony = if (subId >= 0) defaultTelephony.createForSubscriptionId(subId) else defaultTelephony
-        // The refresh callback isn't guaranteed to arrive, so the wait is capped and Android's cached list is used instead.
-        val cellInfos = withTimeoutOrNull(freshWaitMs) { freshCellInfo(telephony) } ?: cachedCellInfo(telephony)
+        // The refresh callback isn't guaranteed to arrive, so the wait is capped and an earlier list is used instead.
+        val fresh = withTimeoutOrNull(freshWait) { freshCellInfo(telephony) }
+        if (fresh !== null) lastCellInfo[subId] = fresh
+        val cellInfos = fresh ?: lastCellInfo[subId] ?: cachedCellInfo(telephony)
         return cellInfos.mapNotNull(::toCell)
     }
 
+    private val lastCellInfo = ConcurrentHashMap<Int, List<CellInfo>>()
+
     @SuppressLint("MissingPermission")
-    private suspend fun freshCellInfo(telephony: TelephonyManager): List<CellInfo> =
+    private suspend fun freshCellInfo(telephony: TelephonyManager): List<CellInfo>? =
         suspendCancellableCoroutine { cont ->
             try {
                 telephony.requestCellInfoUpdate(
@@ -105,7 +112,7 @@ object Cells {
                             errorCode: Int,
                             detail: Throwable?,
                         ) {
-                            if (cont.isActive) cont.resume(cachedCellInfo(telephony))
+                            if (cont.isActive) cont.resume(null)
                         }
                     },
                 )
@@ -114,9 +121,12 @@ object Cells {
             }
         }
 
+    /** Android's cached list mixes the cells of every SIM, so it's only used when one modem is active. */
     @SuppressLint("MissingPermission")
-    private fun cachedCellInfo(telephony: TelephonyManager): List<CellInfo> =
-        runCatching { telephony.allCellInfo }.getOrNull() ?: emptyList()
+    private fun cachedCellInfo(telephony: TelephonyManager): List<CellInfo> {
+        if (telephony.activeModemCount > 1) return emptyList()
+        return runCatching { telephony.allCellInfo }.getOrNull() ?: emptyList()
+    }
 
     private fun plmnOf(
         mcc: String?,
@@ -199,7 +209,7 @@ object Cells {
             Rat.WCDMA,
             identity.uarfcn.toLong(),
             pci = identity.psc.availableOrNull() ?: -1,
-            band = null,
+            band = Bands.wcdmaBandsAt(identity.uarfcn).firstOrNull(),
             registered = info.isRegistered,
             rsrp = info.cellSignalStrength.dbm.availableOrNull(),
             source = "android",
@@ -213,7 +223,7 @@ object Cells {
             Rat.GSM,
             identity.arfcn.toLong(),
             pci = identity.bsic.availableOrNull() ?: -1,
-            band = null,
+            band = Bands.gsmBandsAt(identity.arfcn).singleOrNull(),
             registered = info.isRegistered,
             rsrp = info.cellSignalStrength.dbm.availableOrNull(),
             source = "android",
@@ -243,13 +253,14 @@ object Cells {
         }
         report.optJSONObject("nr")?.let { nr ->
             val arfcn = nr.optLong("arfcn", -1)
-            if (arfcn > 0 && nr.has("pci")) {
+            if (arfcn > 0) {
+                val reportedBands = if (nr.has("band")) intArrayOf(nr.getInt("band")) else IntArray(0)
                 cells +=
                     Cell(
                         Rat.NR,
                         arfcn,
-                        nr.getInt("pci"),
-                        Bands.nrBandsOf(arfcn.toInt()).firstOrNull(),
+                        nr.optInt("pci", -1),
+                        nrBand(reportedBands, arfcn.toInt()),
                         registered = true,
                         rsrp = nr.rsrpOrNull(),
                         source = "modem",

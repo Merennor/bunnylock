@@ -111,8 +111,24 @@ object Qualcomm {
 
     /** The LTE bands QMI numbers from 120 up. */
     private val QMI_LTE_BANDS =
-        (1..14) + 17 + (33..40) + (18..21) + listOf(24, 25, 41, 42, 43, 23, 26, 32, 125, 126, 127, 28, 29, 30, 66, 250, 46, 27, 31, 47, 48, 71)
+        buildList {
+            addAll(1..14)
+            add(17)
+            addAll(33..40)
+            addAll(18..21)
+            addAll(listOf(24, 25, 41, 42, 43, 23, 26, 32, 125, 126, 127, 28, 29, 30, 66, 250, 46, 27, 31, 47, 48, 71))
+        }
     private const val QMI_FIRST_LTE_BAND = 120
+
+    /** The 5G bands QMI numbers from 250 up. */
+    private val QMI_NR_BANDS =
+        buildList {
+            addAll(listOf(1, 2, 3, 5, 7, 8, 20, 28, 38, 41, 50, 51, 66, 70, 71, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85))
+            addAll(257..261)
+            addAll(listOf(12, 25, 34, 39, 40, 65, 86, 48, 14, 13, 18, 26, 30, 29, 53, 46, 91, 92, 93, 94))
+        }
+    private const val QMI_FIRST_NR_BAND = 250
+    private const val RADIO_INTERFACE_NR = 0x0C
 
     // NAS_GET_RF_BAND_INFO
     private const val TLV_RF_BAND_INFO_LIST = 0x01
@@ -672,6 +688,7 @@ object Qualcomm {
             runCatching { putCellLocation(client, out) }
             runCatching { putRfBandInfo(client, out) }
             runCatching { putCarrierAggregation(client, out) }
+            putNrFromRfBands(out)
             out.optJSONObject("nr")?.let { nr ->
                 val arfcn = nr.optLong("arfcn", -1)
                 if (arfcn > 0) nr.put("bands", JSONArray(Bands.nrBandsOf(arfcn.toInt())))
@@ -837,6 +854,18 @@ object Qualcomm {
             }
         }
         out.put("rf", bands)
+    }
+
+    /** Some modems leave the 5G channel out of the cell reports, but the RF band report still names it. */
+    private fun putNrFromRfBands(out: JSONObject) {
+        val rf = out.optJSONArray("rf") ?: return
+        val active =
+            (0 until rf.length())
+                .map { rf.getJSONObject(it) }
+                .firstOrNull { it.optInt("iface") == RADIO_INTERFACE_NR && it.optLong("channel") > 0 } ?: return
+        val nr = out.childObject("nr")
+        if (!nr.has("arfcn")) nr.put("arfcn", active.optLong("channel"))
+        QMI_NR_BANDS.getOrNull(active.optInt("band") - QMI_FIRST_NR_BAND)?.let { nr.put("band", it) }
     }
 
     /** The field is 16 bits, so EARFCNs from 65536 up (bands 66 and 71) arrive cut short. */

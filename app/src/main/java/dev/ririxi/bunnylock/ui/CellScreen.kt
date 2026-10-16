@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItemShapes
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +36,6 @@ import dev.ririxi.bunnylock.modem.formatPlmn
 
 private val NumberKeyboard = KeyboardOptions(keyboardType = KeyboardType.Number)
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun CellScreen(
     state: UiState,
@@ -109,7 +109,6 @@ fun CellScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LockStatusItem(
     shapes: ListItemShapes,
@@ -152,7 +151,6 @@ private fun cellLockDescription(state: UiState): String =
         else -> "The modem picks cells on its own."
     }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PlmnForm(
     state: UiState,
@@ -242,7 +240,6 @@ private fun CellForm.withNrArfcn(text: String): CellForm {
     return copy(nrArfcn = digits, nrBand = band, nrScs = spacing)
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CellLockForm(
     state: UiState,
@@ -281,7 +278,6 @@ private fun CellLockForm(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LteLockFields(
     state: UiState,
@@ -310,7 +306,6 @@ private fun LteLockFields(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NrLockFields(
     state: UiState,

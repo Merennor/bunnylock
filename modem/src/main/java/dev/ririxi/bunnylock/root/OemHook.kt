@@ -80,7 +80,7 @@ object OemHook {
     private fun serviceManager() = Class.forName("android.os.ServiceManager")
 
     private fun serviceBinder(name: String): IBinder? =
-        runCatching { serviceManager().getMethod("getService", String::class.java).invoke(null, name) as IBinder? }.getOrNull()
+        runCatching { serviceManager().getMethod("getService", String::class.java).invoke(null, name) as? IBinder }.getOrNull()
 
     private fun serviceNames(): List<String> =
         runCatching {
@@ -100,7 +100,7 @@ object OemHook {
 
     private fun stubFor(descriptor: String): Class<*>? =
         classLoaders.firstNotNullOfOrNull { loader ->
-            runCatching { Class.forName("$descriptor\$Stub", false, loader) }.getOrNull()
+            runCatching { Class.forName($$"$$descriptor$Stub", false, loader) }.getOrNull()
         }
 
     private fun signature(method: Method) =
@@ -361,7 +361,7 @@ object OemHook {
         val name =
             runCatching {
                 Class
-                    .forName("com.android.internal.telephony.CommandException\$Error")
+                    .forName($$"com.android.internal.telephony.CommandException$Error")
                     .enumConstants
                     ?.getOrNull(code)
                     ?.toString()

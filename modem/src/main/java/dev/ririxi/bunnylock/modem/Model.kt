@@ -122,6 +122,19 @@ object Masks {
     val G4 = maskOf(TelephonyManager.NETWORK_TYPE_LTE)
     val G5 = maskOf(TelephonyManager.NETWORK_TYPE_NR)
 
+    // TelephonyManager.NETWORK_TYPE_LTE_CA, which the SDK hides.
+    private const val NETWORK_TYPE_LTE_CA = 19
+
+    /** LTE also fits a 5G mask, since it anchors 5G NSA. */
+    fun allows(
+        mask: Long,
+        networkType: Int,
+    ): Boolean {
+        val type = if (networkType == NETWORK_TYPE_LTE_CA) TelephonyManager.NETWORK_TYPE_LTE else networkType
+        val anchorsNr = type == TelephonyManager.NETWORK_TYPE_LTE && mask and G5 != 0L
+        return mask and maskOf(type) != 0L || anchorsNr
+    }
+
     /** QMI NAS mode-preference bits. */
     fun toQmi(mask: Long): Int {
         var modePreference = 0

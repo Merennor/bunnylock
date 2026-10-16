@@ -24,6 +24,7 @@ import dev.ririxi.bunnylock.modem.RootState
 import dev.ririxi.bunnylock.modem.reason
 import dev.ririxi.bunnylock.shizuku.RootOrShizuku
 import dev.ririxi.bunnylock.shizuku.ShizukuClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -86,6 +87,8 @@ class MainViewModel(
             try {
                 val release = Updates.newerThan(installed)?.takeIf { it.version != prefs.getString("skippedUpdate", null) }
                 if (ui.checkUpdates) updateState { copy(update = release) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 modem.log("Couldn't check for updates. ${reason(e)}")
             }
@@ -201,6 +204,8 @@ class MainViewModel(
         try {
             _events.emit(block())
             if (refreshAfter) modem.refreshNow()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             _events.emit(reason(e))
         } finally {
@@ -282,7 +287,7 @@ class MainViewModel(
                     val band = cell.band ?: Bands.nrBandsOf(cell.arfcn.toInt()).firstOrNull()
                     copy(
                         nrArfcn = cell.arfcn.toString(),
-                        nrPcis = cell.pci.toString(),
+                        nrPcis = cell.pci.takeIf { it >= 0 }?.toString() ?: nrPcis,
                         nrBand = band,
                         nrScs = band?.let { Bands.nrDefaultScs(it) } ?: nrScs,
                         nrScsPicked = nrScsPicked && band === null,
@@ -363,6 +368,8 @@ class MainViewModel(
         val title = listOfNotNull("bunnylock", appVersion(), "diagnostics").joinToString(" ")
         val text = modem.diagnostics(title, listOf("Shizuku: ${ShizukuClient.describe(getApplication())}"))
         val clipboard = getApplication<Application>().getSystemService(ClipboardManager::class.java)
+        // Kotlin sees primaryClip as read-only because its getter is nullable and its setter isn't.
+        @Suppress("UsePropertyAccessSyntax")
         clipboard.setPrimaryClip(ClipData.newPlainText("bunnylock diagnostics", text))
         _events.tryEmit("Diagnostics copied to the clipboard.")
     }

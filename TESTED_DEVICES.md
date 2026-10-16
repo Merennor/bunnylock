@@ -23,10 +23,11 @@ Without root, bunnylock runs through Shizuku. Some MediaTek phones allow AT comm
 | Motorola G54 5G               |   15    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  |                                                                                                           |
 | Motorola Moto E22             |   13    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |
 | OnePlus Nord CE5              |   16    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |
-| Oppo A74 5G                   |   13    | Shizuku | Android radio HAL |  ✅  |  ❌   | ✅  | ❌  |                                                                                                           |
+| Oppo A74 5G                   |   13    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Oppo Find X9 Pro              |   16    | Shizuku | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Stock ROM                                                                                                 |
 | Oppo Reno 5 5G                |   13    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Realme 8 Pro                  |   13    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
+| Realme C53                    |   14    | Shizuku | Android radio HAL |  ❌  |  ❌   | ✅  | ❌  |                                                                                                           |
 | Redmi Note 10                 |   14    | Root    | MediaTek AT       |  ✅  |  ✅   | ✅  | ✅  | Custom ROM                                                                                                |
 | Samsung Galaxy A33            |   15    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Samsung Galaxy A36            |   16    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
@@ -44,6 +45,7 @@ Without root, bunnylock runs through Shizuku. Some MediaTek phones allow AT comm
 | Samsung Galaxy S23 Ultra      |   16    | Root    | Qualcomm QMI      |  ✅  |  ✅   | ✅  | ✅  |                                                                                                           |
 | Samsung Galaxy S24            | 16, 17  | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Samsung Galaxy S25            |   17    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
+| Samsung Galaxy S25+           |   15    | Root    | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  | Can't be locked to GSM1800                                                                                |
 | Samsung Galaxy S25 Ultra      |   16    | Root    | Qualcomm QMI      |  ✅  |  ✅   | ✅  | ✅  |                                                                                                           |
 | Samsung Galaxy S26 Ultra      |   17    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |
 | Samsung Galaxy Z Fold 8 Ultra |   17    | Shizuku | Android radio HAL |  ✅  |  ✅   | ✅  | ❌  |                                                                                                           |

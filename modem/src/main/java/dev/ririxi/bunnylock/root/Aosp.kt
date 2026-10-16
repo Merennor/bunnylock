@@ -89,11 +89,8 @@ object Aosp {
         ): List<Int> =
             runCatching {
                 val method = isub.javaClass.methods.first { it.name == name && it.parameterTypes.size == args.size }
-                when (val result = method.invoke(isub, *args)) {
-                    is Int -> listOf(result)
-                    is IntArray -> result.toList()
-                    else -> emptyList()
-                }
+                val result = method.invoke(isub, *args)
+                (result as? IntArray)?.toList() ?: listOfNotNull(result as? Int)
             }.getOrDefault(emptyList()).filter { it >= 0 }
 
         return ids("getSubId", slot).firstOrNull()
@@ -113,7 +110,7 @@ object Aosp {
                 .getMethod("getService", String::class.java)
                 .invoke(null, serviceName) as IBinder
         return Class
-            .forName("$aidlInterface\$Stub")
+            .forName($$"$$aidlInterface$Stub")
             .getMethod("asInterface", IBinder::class.java)
             .invoke(null, binder)!!
     }
@@ -298,7 +295,7 @@ object Aosp {
             .onFailure { json.put("channelsError", it.message ?: it.javaClass.simpleName) }
         runCatching { json.put("selectionMode", call("getNetworkSelectionMode", subId) as Int) }
         runCatching {
-            val manualPlmn = call("getManualNetworkSelectionPlmn", subId) as String?
+            val manualPlmn = call("getManualNetworkSelectionPlmn", subId) as? String
             if (!manualPlmn.isNullOrEmpty()) json.put("manualPlmn", manualPlmn)
         }
         return json
@@ -400,6 +397,22 @@ object Aosp {
         throw IllegalStateException(
             "The radio refused this network mode (${failures.joinToString("; ")}).$restoredText$causeText Before: $before. After: $after.",
         )
+    }
+
+    /**
+     * Some radios report a network mode as set but keep the SIM on its old network. Android ignores a value it already
+     * holds, so a different mode is set first, all with the radio off.
+     */
+    fun reapplyAllowed(
+        subId: Int,
+        mask: Long,
+    ): JSONObject {
+        val other = unsetReasonMask()?.takeIf { it != mask } ?: GENERATION_BITS.reduce(Long::or)
+        inAirplaneMode {
+            runCatching { setAllowedOnce(subId, other) }
+            check(setAllowedOnce(subId, mask)) { "The radio refused the network mode with the radio off." }
+        }
+        return JSONObject().put("airplaneMode", true)
     }
 
     private fun applied(

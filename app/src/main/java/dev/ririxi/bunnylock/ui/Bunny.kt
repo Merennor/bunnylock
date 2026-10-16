@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.animation.core.Animatable
@@ -22,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -312,14 +313,11 @@ fun BouncyLockBadge(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 private fun Density.revealedHeight(state: PullToRefreshState): Float = REFRESH_SLOT.toPx() * state.distanceFraction.coerceIn(0f, 1f)
 
-@OptIn(ExperimentalMaterial3Api::class)
 fun Modifier.belowBunnyRefresh(state: PullToRefreshState): Modifier = graphicsLayer { translationY = revealedHeight(state) }
 
 // The bunny stays put while the pull uncovers it from the top, ears first, then rides down with the content.
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BunnyRefreshIndicator(
     state: PullToRefreshState,

@@ -1,3 +1,5 @@
+@file:Suppress("FunctionName")
+
 package dev.ririxi.bunnylock.ui
 
 import androidx.compose.animation.AnimatedContent
@@ -31,7 +33,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -76,8 +77,9 @@ import dev.ririxi.bunnylock.modem.Access
 import dev.ririxi.bunnylock.modem.RootState
 import dev.ririxi.bunnylock.modem.SimInfo
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
-private const val LIVE_REFRESH_PAUSE_MS = 500L
+private val LIVE_REFRESH_PAUSE = 500.milliseconds
 
 enum class Tab(
     val label: String,
@@ -89,7 +91,7 @@ enum class Tab(
     TOOLS("Tools", Icons.Rounded.Build),
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BunnyApp(vm: MainViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -214,7 +216,6 @@ fun BunnyApp(vm: MainViewModel) {
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun UpdateDialog(
     release: Release,
@@ -257,7 +258,7 @@ private fun LiveRefresh(vm: MainViewModel) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 vm.refreshConnection()
-                delay(LIVE_REFRESH_PAUSE_MS)
+                delay(LIVE_REFRESH_PAUSE)
             }
         }
     }
@@ -270,7 +271,6 @@ private fun topBarSubtitle(state: UiState): String {
 }
 
 /** [selected] counts from 1. */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SimChip(
     sims: List<SimInfo>,

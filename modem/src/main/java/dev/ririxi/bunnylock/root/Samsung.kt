@@ -34,10 +34,10 @@ object Samsung {
                 Class
                     .forName("android.os.ServiceManager")
                     .getMethod("getService", String::class.java)
-                    .invoke(null, "isemtelephony") as IBinder? ?: return@runCatching null
+                    .invoke(null, "isemtelephony") as? IBinder ?: return@runCatching null
             val service =
                 Class
-                    .forName("com.android.internal.telephony.ISemTelephony\$Stub")
+                    .forName($$"com.android.internal.telephony.ISemTelephony$Stub")
                     .getMethod("asInterface", IBinder::class.java)
                     .invoke(null, binder) ?: return@runCatching null
             val methods = service.javaClass.methods

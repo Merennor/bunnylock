@@ -32,6 +32,8 @@ import java.io.OutputStream
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Runs the helper through Shizuku: as a UserService, or in a Shizuku shell where the service won't start (RikkaApps/Shizuku#1171).
@@ -119,7 +121,7 @@ class ShizukuClient(
         }
         // Some phones keep Shizuku from showing its prompt, so the wait has to end by itself.
         try {
-            withTimeout(60_000) {
+            withTimeout(60.seconds) {
                 withContext(Dispatchers.Main) {
                     suspendCancellableCoroutine<Unit> { cont ->
                         val listener =
@@ -152,7 +154,7 @@ class ShizukuClient(
 
     private suspend fun bind(): ShizukuService.Proxy =
         try {
-            withTimeout(15_000) {
+            withTimeout(15.seconds) {
                 withContext(Dispatchers.Main) {
                     suspendCancellableCoroutine { cont ->
                         val newConnection =
@@ -190,10 +192,10 @@ class ShizukuClient(
 
     override suspend fun call(
         cmd: String,
-        timeoutMs: Long,
+        timeout: Duration,
         build: JSONObject.() -> Unit,
     ): JSONObject {
-        shell?.let { return it.call(cmd, timeoutMs, build) }
+        shell?.let { return it.call(cmd, timeout, build) }
         val proxy = service ?: throw RootException("The Shizuku service isn't running.")
         val request = JSONObject().put("cmd", cmd).apply(build)
         // A binder call can't be interrupted, so one that hangs is left behind on its own thread.
@@ -203,7 +205,7 @@ class ShizukuClient(
         }
         val response =
             try {
-                JSONObject(withTimeout(timeoutMs) { reply.await() })
+                JSONObject(withTimeout(timeout) { reply.await() })
             } catch (_: TimeoutCancellationException) {
                 throw RootException("The Shizuku service didn't answer in time.")
             } catch (_: RemoteException) {
@@ -262,9 +264,9 @@ class ShizukuClient(
         }
 
         /** True when Shizuku is running. Its binder can arrive shortly after app start. */
-        suspend fun awaitBinder(timeoutMs: Long = 2000): Boolean {
+        suspend fun awaitBinder(timeout: Duration = 2.seconds): Boolean {
             if (binderAlive()) return true
-            return withTimeoutOrNull(timeoutMs) {
+            return withTimeoutOrNull(timeout) {
                 suspendCancellableCoroutine { cont ->
                     val listener =
                         object : Shizuku.OnBinderReceivedListener {

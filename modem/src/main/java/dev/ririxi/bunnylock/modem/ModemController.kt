@@ -19,6 +19,7 @@ import dev.ririxi.bunnylock.data.Rat
 import dev.ririxi.bunnylock.data.RootClient
 import dev.ririxi.bunnylock.data.RootException
 import dev.ririxi.bunnylock.data.Signal
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,6 +34,8 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 private data class BackendReadout(
     val groups: List<BandGroupState> = emptyList(),
@@ -58,7 +61,13 @@ private const val MAX_HAL_BANDS_PER_SPEC = 8
 private const val NEWEST_OLD_HAL_LTE_BAND = 88
 
 // LTE bands even old Qualcomm modems know.
-private val WIDELY_DEFINED_LTE_BANDS = (1..14) + (17..21) + (23..43) + listOf(46, 47, 48, 66, 71)
+private val WIDELY_DEFINED_LTE_BANDS =
+    buildList {
+        addAll(1..14)
+        addAll(17..21)
+        addAll(23..43)
+        addAll(listOf(46, 47, 48, 66, 71))
+    }
 private val WIDELY_DEFINED_NR_BANDS = listOf(1, 2, 3, 5, 7, 8, 12, 20, 25, 28, 38, 40, 41, 48, 66, 71, 77, 78, 79)
 private val EUROPE_MCCS = 200..299
 private val NORTH_AMERICA_MCCS = 302..316
@@ -67,7 +76,11 @@ private val COMMON_NR_BANDS_NORTH_AMERICA = listOf(2, 5, 25, 41, 66, 71, 77, 78)
 private val COMMON_NR_BANDS_ELSEWHERE = listOf(1, 3, 5, 8, 28, 40, 41, 78)
 
 // GSM 850, 900 (P, E and R), 1800 and 1900, as AccessNetworkConstants.GeranBand numbers.
-private val GERAN_RESTORE_BANDS = listOf(8, 9, 10, 11, 12, 13)
+private val GERAN_BANDS = mapOf(850 to listOf(8), 900 to listOf(9, 10, 11), 1800 to listOf(12), 1900 to listOf(13))
+private val GERAN_RESTORE_BANDS = GERAN_BANDS.values.flatten()
+
+// AccessNetworkConstants.UtranBand has no bands 15 to 18.
+private val HAL_WCDMA_BANDS = Bands.WCDMA.filter { it !in 15..18 }
 private val UTRAN_RESTORE_BANDS = listOf(1, 2, 3, 4, 5, 8, 9, 19)
 private const val MAX_LOG_LINES = 80
 
@@ -81,8 +94,10 @@ private const val QMI_NR_LOCK_SEVERAL_PCIS = 3
 private const val QMI_NR_LOCK_GNB_LIST = 4
 
 // Long enough for the helper to go through airplane mode when the modem only changes the lock with LTE off.
-private const val QC_LTE_LOCK_TIMEOUT_MS = 60_000L
-private const val NET_MODE_TIMEOUT_MS = 60_000L
+private val QC_LTE_LOCK_TIMEOUT = 60.seconds
+private val NET_MODE_TIMEOUT = 60.seconds
+private const val NET_MODE_SWITCH_CHECKS = 10
+private val NET_MODE_SWITCH_CHECK = 1.seconds
 private const val QC_REPORTED_EARFCN_BITS = 0xFFFFL
 private const val QC_LTE_OFF_NOTE = "This modem only changes the LTE cell lock with the radio off, so airplane mode came on for a moment."
 
@@ -98,13 +113,13 @@ private const val MTK_PCI_UNSET = 65535
 private const val NR_DUAL_CONNECTIVITY_ENABLE = 1
 private const val NR_DUAL_CONNECTIVITY_DISABLE = 2
 
-private const val HAL_LOCK_SETTLE_MS = 8000L
-private const val HAL_LOCK_RECHECK_MS = 6000L
+private val HAL_LOCK_SETTLE = 8.seconds
+private val HAL_LOCK_RECHECK = 6.seconds
 private const val HAL_LOCK_RECHECKS = 2
 
 private const val PIXEL_AT_NODE = "/dev/umts_router"
 
-private const val LIVE_CELL_SCAN_WAIT_MS = 1500L
+private val LIVE_CELL_SCAN_WAIT = 1500.milliseconds
 
 /** An AT node that starts like this sends commands through MediaTek's RIL passthrough instead of a modem tty. */
 private const val RIL_NODE_PREFIX = "ril:"
@@ -112,6 +127,16 @@ private const val RIL_NODE_PREFIX = "ril:"
 private fun rilNode(sim: Int) = "$RIL_NODE_PREFIX$sim"
 
 private class LockUnanswered : IllegalStateException("The radio didn't answer, so it may not support locks through Android's radio HAL.")
+
+/** [runCatching] that lets coroutine cancellation through. */
+private inline fun <T> runSuspendCatching(block: () -> T): Result<T> =
+    try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Result.failure(e)
+    }
 
 class ModemController(
     context: Context,
@@ -146,6 +171,10 @@ class ModemController(
     // From the last full refresh, reused by the live ones.
     private var backendCells: List<Cell> = emptyList()
     private var backendCarriers: List<Carrier> = emptyList()
+
+    // The raw reports behind the carriers, for diagnostics.
+    private var physicalChannelReport: JSONArray? = null
+    private var qualcommServingReport: JSONObject? = null
 
     private inline fun updateState(transform: ModemState.() -> ModemState) = _state.update(transform)
 
@@ -183,7 +212,7 @@ class ModemController(
             if (!shellOnly && !hello.optBoolean("qrtrLib")) log("The QRTR library didn't load (${hello.optString("libError").asClause()}), so QMI won't work.")
             showConnectStep("Checking what this phone's modem offers...")
             // Probing every vendor telephony service for a modem passthrough is slow on phones that have many.
-            val device = DeviceInfo.from(helper.call("detect", 90_000))
+            val device = DeviceInfo.from(helper.call("detect", 90.seconds))
 
             fun allowed(candidate: Backend) = device.allows(candidate, shellOnly)
             val suggestedBackend = device.suggested().takeIf(::allowed) ?: Backend.ANDROID
@@ -213,6 +242,8 @@ class ModemController(
             loadSims()
             refreshNow()
             onConnected()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val why = e.message?.asSentence() ?: "Root access was denied."
             log("Couldn't connect. $why")
@@ -286,6 +317,8 @@ class ModemController(
     ): T =
         try {
             block()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val message = "Couldn't $goal. ${reason(e)}"
             log(message)
@@ -338,13 +371,13 @@ class ModemController(
         }
     }
 
-    private suspend fun restartRadio() = helper.call("radio.cycle", 30_000)
+    private suspend fun restartRadio() = helper.call("radio.cycle", 30.seconds)
 
     /** Restarts only the selected SIM's radio so the other stays connected. Falls back to airplane mode. */
     private suspend fun restartSimRadio() {
         val result =
             try {
-                helper.call("radio.cycleSim", 60_000) {
+                helper.call("radio.cycleSim", 60.seconds) {
                     put("sim", current.sim)
                     put("subId", subId())
                 }
@@ -362,6 +395,15 @@ class ModemController(
      */
     private suspend fun setChannels(specs: JSONArray) {
         sendLock(requestOf(specs.objects()))
+        prefs.edit().putString(halSpecsKey(current.sim), specs.toString()).apply()
+    }
+
+    /** Some radios refuse the remaining locks when they're sent alone, so every band of the [freed] network goes along with them. */
+    private suspend fun setChannelsFreeing(
+        specs: JSONArray,
+        freed: Int,
+    ) {
+        sendWithEveryBand(requestOf(specs.objects()), setOf(freed))
         prefs.edit().putString(halSpecsKey(current.sim), specs.toString()).apply()
     }
 
@@ -412,12 +454,29 @@ class ModemController(
     /** Old Qualcomm phones that can't report their bands, where an unlock only brings back the saved lock. */
     private suspend fun keepsSavedBands(): Boolean = current.device?.vendor == "qualcomm" && reportedChannels() === null
 
-    private suspend fun aospState(): JSONObject? = runCatching { helper.call("aosp.state") { put("subId", subId()) } }.getOrNull()
+    private suspend fun aospState(): JSONObject? = runSuspendCatching { helper.call("aosp.state") { put("subId", subId()) } }.getOrNull()
 
     private suspend fun reportedChannels(): List<JSONObject>? = aospState()?.optJSONArray("channels")?.objects()
 
-    private suspend fun replaceSavedLteBands() {
+    /** On phones that [keepsSavedBands], every band of the freed networks is sent first, so the unlock can't bring the old lock back. */
+    private suspend fun replaceSavedBands(freedRans: Collection<Int>) {
+        val legacy =
+            listOfNotNull(
+                channelSpec(Ran.GERAN, GERAN_RESTORE_BANDS, emptyList()).takeIf { Ran.GERAN in freedRans },
+                channelSpec(Ran.UTRAN, UTRAN_RESTORE_BANDS, emptyList()).takeIf { Ran.UTRAN in freedRans },
+            )
+        if (Ran.EUTRAN !in freedRans && legacy.isEmpty()) return
         if (!prefs.contains(halSpecsKey(current.sim)) || !keepsSavedBands()) return
+        if (Ran.EUTRAN in freedRans) replaceLteBands()
+        if (legacy.isEmpty()) return
+        try {
+            sendChannels(JSONArray(legacy))
+        } catch (e: RootException) {
+            log("Sending every 2G and 3G band didn't work (${reason(e).asClause()}).")
+        }
+    }
+
+    private suspend fun replaceLteBands() {
         val lte = supportedBands(Group.LTE) ?: return
         // One unknown band makes the modem reject the whole list, so shorter lists are tried next.
         val bandLists = listOf(lte, lte.filter { it <= NEWEST_OLD_HAL_LTE_BAND }, lte.filter { it in WIDELY_DEFINED_LTE_BANDS })
@@ -509,21 +568,28 @@ class ModemController(
             if (Ran.NGRAN !in freedRans) return null
             return "If the phone still sticks to the old 5G bands, lock 5G to the ones you need instead, $MAX_HAL_BANDS_PER_SPEC at most. That replaces the old lock."
         }
-        val lostLegacy = bandsOn(reported, Ran.GERAN).isEmpty() && bandsOn(reported, Ran.UTRAN).isEmpty()
+        val remaining = requestOf(savedChannelSpecs())
+        val lockedRans = remaining.map { it.optInt("ran") }.toSet()
+        // A locked 2G or 3G network still reports its bands, so only the unlocked ones show whether the modem switched them off.
+        val unlockedLegacy = listOf(Ran.GERAN, Ran.UTRAN) - lockedRans
+        val lostLegacy = unlockedLegacy.isNotEmpty() && unlockedLegacy.all { bandsOn(reported, it).isEmpty() }
         val lostLte = bandsOn(reported, Ran.EUTRAN).isEmpty()
         val lostNr = has5g(state) && bandsOn(reported, Ran.NGRAN).isEmpty()
-        val keptLte = Ran.EUTRAN in freedRans && keptOldBands(freed, reported, Ran.EUTRAN)
-        val keptNr = Ran.NGRAN in freedRans && keptOldBands(freed, reported, Ran.NGRAN)
-        if (!lostLegacy && !lostLte && !lostNr && !keptLte && !keptNr) return null
+        val keptRans = freedRans.filter { keptOldBands(freed, reported, it) }.toSet()
+        if (!lostLegacy && !lostLte && !lostNr && keptRans.isEmpty()) return null
 
         log("SIM ${current.sim} still had a lock or switched-off networks after the unlock, so every band was named again.")
         if (lostLegacy) clearsLeftOutNetworks = true
-        val remaining = requestOf(savedChannelSpecs())
         val fill =
             if (clearsLeftOutNetworks) {
                 leftOutNetworks(remaining)
             } else {
-                setOfNotNull(Ran.EUTRAN, Ran.NGRAN.takeIf { keptNr || lostNr }) - remaining.map { it.optInt("ran") }.toSet()
+                buildSet {
+                    add(Ran.EUTRAN)
+                    if (lostNr) add(Ran.NGRAN)
+                    addAll(keptRans)
+                    removeAll(lockedRans)
+                }
             }
         val nrBands =
             try {
@@ -573,10 +639,44 @@ class ModemController(
     /** A band lock pins channels too on phones that need them, so [bandSpecs] marks its entries to tell them from a cell lock. */
     private val JSONObject.isCellLock get() = !optBoolean("bandLock") && !intList("channels").isNullOrEmpty()
 
-    /** Only the LTE and NR groups reach this and [ratOf]: they are all the radio HAL can lock. */
-    private fun ranOf(group: Group) = if (group == Group.LTE) Ran.EUTRAN else Ran.NGRAN
+    private fun ranOf(group: Group) =
+        when (group) {
+            Group.GSM -> Ran.GERAN
+            Group.WCDMA -> Ran.UTRAN
+            Group.LTE -> Ran.EUTRAN
+            Group.NR, Group.NR_SA, Group.NR_NSA -> Ran.NGRAN
+        }
 
-    private fun ratOf(group: Group) = if (group == Group.LTE) Rat.LTE else Rat.NR
+    private fun ratOf(group: Group) =
+        when (group) {
+            Group.GSM -> Rat.GSM
+            Group.WCDMA -> Rat.WCDMA
+            Group.LTE -> Rat.LTE
+            Group.NR, Group.NR_SA, Group.NR_NSA -> Rat.NR
+        }
+
+    private val Group.isLegacy get() = this == Group.GSM || this == Group.WCDMA
+
+    /** bunnylock names GSM bands by MHz, the radio HAL by GeranBand number. */
+    private fun halBandsOf(
+        group: Group,
+        bands: List<Int>,
+    ): List<Int> = if (group == Group.GSM) bands.flatMap { GERAN_BANDS[it].orEmpty() } else bands
+
+    private fun gsmBandsOf(geranBands: List<Int>): List<Int> = GERAN_BANDS.filterValues { bands -> bands.any { it in geranBands } }.keys.toList()
+
+    /** A GSM channel from 512 to 810 may be 1800 or 1900, so its cell has no band of its own. */
+    private fun Cell.isOnAnyOf(bands: List<Int>): Boolean = if (band !== null) band in bands else bandsAt(this).any { it in bands }
+
+    private fun bandsAt(cell: Cell): List<Int> {
+        val channel = cell.arfcn.toInt()
+        return when (cell.rat) {
+            Rat.GSM -> Bands.gsmBandsAt(channel)
+            Rat.WCDMA -> Bands.wcdmaBandsAt(channel)
+            Rat.LTE -> Bands.lteBandsAt(channel)
+            Rat.NR -> Bands.nrBandsOf(channel)
+        }
+    }
 
     /**
      * [supportedBands] falls back to the standard list for [group] when the modem doesn't report its own.
@@ -593,10 +693,15 @@ class ModemController(
         return BandGroupState(group, supported, current)
     }
 
-    private fun has5g(aospState: JSONObject?): Boolean {
+    private fun has5g(aospState: JSONObject?): Boolean = supportsNetwork(aospState, Masks.G5)
+
+    private fun supportsNetwork(
+        aospState: JSONObject?,
+        mask: Long,
+    ): Boolean {
         val supported = aospState?.optLong("supportedTypes") ?: 0L
         val unknown = supported and Masks.G4 == 0L
-        return unknown || supported and Masks.G5 != 0L
+        return unknown || supported and mask != 0L
     }
 
     fun refresh() =
@@ -608,9 +713,11 @@ class ModemController(
         if (!helper.running) return
         updateState { copy(refreshing = true) }
         try {
+            // Subscription ids change when a SIM is swapped or switched off and on.
+            loadSims()
             val sim = current.sim
             val subscriptionId = subId()
-            val aospState = runCatching { helper.call("aosp.state") { put("subId", subscriptionId) } }.getOrNull()
+            val aospState = runSuspendCatching { helper.call("aosp.state") { put("subId", subscriptionId) } }.getOrNull()
             val modem =
                 when (current.backend) {
                     Backend.QUALCOMM -> loadQualcomm(sim, aospState)
@@ -664,6 +771,8 @@ class ModemController(
                 )
             }
             onRefreshed(current)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             report("Couldn't refresh. ${reason(e)}")
         } finally {
@@ -676,12 +785,16 @@ class ModemController(
         cells: List<Cell>,
         signals: List<Signal>,
     ): List<Carrier> {
-        val reported =
-            runCatching { Carriers.fromReport(helper.call("aosp.carriers") { put("sim", sim) }.optJSONArray("carriers")) }
-                .getOrDefault(emptyList())
-        // Some radio HALs leave out channels and PCIs.
-        val identified = reported.any { it.arfcn !== null || it.pci !== null }
-        val carriers = if (identified) reported else backendCarriers + reported.filter { carrier -> backendCarriers.none { it.rat == carrier.rat } }
+        physicalChannelReport = runSuspendCatching { helper.call("aosp.carriers") { put("sim", sim) }.optJSONArray("carriers") }.getOrNull()
+        val reported = Carriers.fromReport(physicalChannelReport)
+        val carriers =
+            Rat.entries.flatMap { rat ->
+                val android = reported.filter { it.rat == rat }
+                val modem = backendCarriers.filter { it.rat == rat }
+                // Some radio HALs leave out the channel and PCI on some carriers. For those networks the modem's own list is used instead.
+                val identified = android.isNotEmpty() && android.all { it.arfcn !== null || it.pci !== null }
+                if (identified || modem.isEmpty()) android else modem
+            }
         return Carriers.complete(carriers, cells, signals)
     }
 
@@ -690,12 +803,13 @@ class ModemController(
         val sim = current.sim
         val subscriptionId = subId()
         if (current.backend == Backend.QUALCOMM) {
-            runCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()?.let { serving ->
+            runSuspendCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()?.let { serving ->
+                qualcommServingReport = serving
                 backendCells = runCatching { Cells.fromQualcomm(serving) }.getOrDefault(backendCells)
                 backendCarriers = Carriers.fromReport(serving.optJSONArray("carriers"))
             }
         }
-        val cells = Cells.merge(backendCells, Cells.scan(context, subscriptionId, LIVE_CELL_SCAN_WAIT_MS))
+        val cells = Cells.merge(backendCells, Cells.scan(context, subscriptionId, LIVE_CELL_SCAN_WAIT))
         val signals = Carriers.signals(context, subscriptionId)
         val carriers = connectionCarriers(sim, cells, signals)
         if (current.refreshing || current.sim != sim) return
@@ -708,7 +822,12 @@ class ModemController(
     ): List<BandGroupState> =
         modem.groups.map { groupState ->
             // A HAL band lock stands by while a cell lock holds its network, and that cell may be on another band.
-            val cellLock = if (groupState.group == Group.LTE) modem.lteLock else modem.nrLock
+            val cellLock =
+                when (groupState.group) {
+                    Group.LTE -> modem.lteLock
+                    Group.NR -> modem.nrLock
+                    else -> null
+                }
             val standingBy = cellLock !== null
             val stray = if (groupState.locked && !standingBy) strayBand(cells, groupState.group, groupState.current.orEmpty()) else null
             groupState.copy(stray = stray)
@@ -717,7 +836,7 @@ class ModemController(
     private suspend fun loadSamsungNrMode(sim: Int): NrMode? {
         if (current.device?.samsungNrMode != true) return null
         // 3 and 4 are temporary IMS states, and -1 is a failed read.
-        val mode = runCatching { helper.call("samsung.nrMode") { put("sim", sim) }.optInt("mode", -1) }.getOrNull()
+        val mode = runSuspendCatching { helper.call("samsung.nrMode") { put("sim", sim) }.optInt("mode", -1) }.getOrNull()
         return mode?.let { NrMode.entries.getOrNull(it) }
     }
 
@@ -751,7 +870,8 @@ class ModemController(
         groups += bandGroupState(Group.WCDMA, hardware.intList("wcdma"), qcState.intList("wcdma"))
         groups += bandGroupState(Group.GSM, hardware.intList("gsm"), qcState.intList("gsm"))
         val samsungNrMode = if (sim in samsungNrModeReadbackSims) loadSamsungNrMode(sim) else null
-        val serving = runCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()
+        val serving = runSuspendCatching { helper.call("qc.serving") { put("sim", sim) } }.getOrNull()
+        qualcommServingReport = serving
         val manualSelection = qcState.optJSONObject("netSel")?.takeIf { it.optInt("mode") == QMI_NET_SEL_MANUAL }
         return BackendReadout(
             groups = groups,
@@ -935,6 +1055,10 @@ class ModemController(
         val nrBands = channelBands(specs, Ran.NGRAN)
         val groups = mutableListOf(bandGroupState(Group.LTE, supportedBands = null, currentBands = channelBands(specs, Ran.EUTRAN)))
         if (has5g(aospState) || nrBands !== null) groups += bandGroupState(Group.NR, supportedBands = null, currentBands = nrBands)
+        val wcdmaBands = channelBands(specs, Ran.UTRAN)
+        if (supportsNetwork(aospState, Masks.G3) || wcdmaBands !== null) groups += bandGroupState(Group.WCDMA, supportedBands = HAL_WCDMA_BANDS, currentBands = wcdmaBands)
+        val gsmBands = channelBands(specs, Ran.GERAN)?.let(::gsmBandsOf)
+        if (supportsNetwork(aospState, Masks.G2) || gsmBands !== null) groups += bandGroupState(Group.GSM, supportedBands = null, currentBands = gsmBands)
         return BackendReadout(
             nrMode = loadSamsungNrMode(sim),
             groups = groups,
@@ -967,12 +1091,14 @@ class ModemController(
         lockedBands: Collection<Int>,
     ): Int? {
         val rat = ratOf(group)
-        return cells
-            .filter { it.registered && it.rat == rat }
-            .firstOrNull { cell ->
-                val coveringBands = if (rat == Rat.LTE) Bands.lteBandsAt(cell.arfcn.toInt()) else Bands.nrBandsOf(cell.arfcn.toInt())
-                coveringBands.isNotEmpty() && coveringBands.none { it in lockedBands }
-            }?.band
+        val strayCell =
+            cells
+                .filter { it.registered && it.rat == rat }
+                .firstOrNull { cell ->
+                    val coveringBands = bandsAt(cell)
+                    coveringBands.isNotEmpty() && coveringBands.none { it in lockedBands }
+                } ?: return null
+        return strayCell.band ?: bandsAt(strayCell).first()
     }
 
     private fun channelBands(
@@ -1004,11 +1130,11 @@ class ModemController(
 
     /** A modem that follows a HAL lock leaves the old cell within seconds, so the wait only grows while [findStray] still finds one. */
     private suspend fun settledCells(findStray: (List<Cell>) -> Any?): List<Cell> {
-        delay(HAL_LOCK_SETTLE_MS)
+        delay(HAL_LOCK_SETTLE)
         var cells = Cells.scan(context, subId())
         repeat(HAL_LOCK_RECHECKS) {
             if (findStray(cells) === null) return cells
-            delay(HAL_LOCK_RECHECK_MS)
+            delay(HAL_LOCK_RECHECK)
             cells = Cells.scan(context, subId())
         }
         return cells
@@ -1101,25 +1227,41 @@ class ModemController(
         check(!nrListTooLong) { "This phone only takes $MAX_HAL_BANDS_PER_SPEC 5G bands in one lock, so pick $MAX_HAL_BANDS_PER_SPEC or fewer." }
         val override = mapOf(group to if (allBandsSelected) emptyList() else bands)
         val freed = if (allBandsSelected) savedChannelSpecs().filter { it.optInt("ran") == ranOf(group) && !it.isCellLock } else emptyList()
-        if (allBandsSelected && group == Group.LTE) replaceSavedLteBands()
+        if (allBandsSelected) replaceSavedBands(listOf(ranOf(group)))
         val bandsOnlySpecs = bandSpecs(override)
-        val bandsOnlyResult = runCatching { setChannels(bandsOnlySpecs) }
+        val bandsOnlyResult = runSuspendCatching { setChannels(bandsOnlySpecs) }
         val failure = bandsOnlyResult.exceptionOrNull()
         var note: String? = null
-        if (failure !== null && failure !is LockUnanswered && !allBandsSelected && !needsChannels) {
-            val error = failure.message?.takeIf { it.isNotBlank() } ?: failure.javaClass.simpleName
-            log("HAL band-lock diagnostic: request=$bandsOnlySpecs; error=$error; ${bandLockProbe(group, bands)}; retry=band+channel.")
-            setChannels(bandSpecs(override, withChannels = true))
-            needsChannels = true
-            note = "This phone needs visible frequencies together with the selected bands, so bunnylock included them in the lock."
-        } else {
-            bandsOnlyResult.getOrThrow()
+        when {
+            failure === null -> {}
+
+            failure is LockUnanswered -> throw failure
+
+            !allBandsSelected && !needsChannels && !group.isLegacy -> {
+                val error = failure.message?.takeIf { it.isNotBlank() } ?: failure.javaClass.simpleName
+                log("HAL band-lock diagnostic: request=$bandsOnlySpecs; error=$error; ${bandLockProbe(group, bands)}; retry=band+channel.")
+                setChannels(bandSpecs(override, withChannels = true))
+                needsChannels = true
+                note = "This phone needs visible frequencies together with the selected bands, so bunnylock included them in the lock."
+            }
+
+            group == Group.GSM && bands == listOf(1800) -> {
+                log("HAL band-lock diagnostic: request=$bandsOnlySpecs; error=${failure.message}.")
+                error("This phone's radio software doesn't know GSM 1800, so it refuses a 2G lock to 1800 alone.")
+            }
+
+            allBandsSelected && bandsOnlySpecs.length() > 0 -> {
+                log("HAL band-unlock diagnostic: request=$bandsOnlySpecs; error=${failure.message}; retry=every ${group.label} band named.")
+                setChannelsFreeing(bandsOnlySpecs, ranOf(group))
+            }
+
+            else -> throw failure
         }
         if (allBandsSelected) return finishHalUnlock(freed)?.let { "${group.label} bands unlocked. $it" }
         val cells = settledCells { strayBand(it, group, bands) }
         val registered = cells.filter { it.registered }
         // Some Shannon RILs read a bands-only lock as "no allowed channels", so the fall to 2G/3G is detected here.
-        if (!needsChannels && registered.isNotEmpty() && registered.none { it.rat == Rat.LTE || it.rat == Rat.NR }) {
+        if (!group.isLegacy && !needsChannels && registered.isNotEmpty() && registered.none { it.rat == Rat.LTE || it.rat == Rat.NR }) {
             needsChannels = true
             setChannels(bandSpecs(override, withChannels = true))
             return "This phone fell back to 2G or 3G with a bands-only lock, so the lock was redone with the visible frequencies. bunnylock will do that on this phone from now on."
@@ -1155,7 +1297,7 @@ class ModemController(
         bands: List<Int>,
     ): List<Long> =
         current.cells
-            .filter { it.rat == rat && it.band in bands }
+            .filter { it.rat == rat && it.isOnAnyOf(bands) }
             .map { it.arfcn }
             .distinct()
             .take(MAX_HAL_CHANNELS)
@@ -1177,20 +1319,22 @@ class ModemController(
     }
 
     /**
-     * Every lock the radio HAL should hold once [override] replaces the bands of the groups it names: the LTE and NR
-     * band locks, then the cell locks on the networks [override] leaves alone.
+     * Every lock the radio HAL should hold once [override] replaces the bands of the groups it names: the band locks
+     * of every network, then the cell locks on the networks [override] leaves alone.
      */
     private fun bandSpecs(
         override: Map<Group, List<Int>>,
         withChannels: Boolean = needsChannels,
     ): JSONArray {
         val specs = JSONArray()
-        for (group in listOf(Group.LTE, Group.NR)) {
+        for (group in listOf(Group.LTE, Group.NR, Group.WCDMA, Group.GSM)) {
             val groupState = current.groups.firstOrNull { it.group == group } ?: continue
             val bands = override[group] ?: groupState.current?.sorted().orEmpty()
             if (bands.isEmpty() || bands.containsAll(groupState.supported)) continue
-            val channels = if (withChannels) visibleChannels(ratOf(group), bands) else emptyList()
-            if (withChannels && channels.isEmpty()) {
+            // Only LTE and 5G locks have needed channels so far, and 2G and 3G cells are rarely visible from LTE.
+            val pinsChannels = withChannels && !group.isLegacy
+            val channels = if (pinsChannels) visibleChannels(ratOf(group), bands) else emptyList()
+            if (pinsChannels && channels.isEmpty()) {
                 if (group in override) {
                     log("HAL band-lock diagnostic: ${bandLockProbe(group, bands)}; retry unavailable.")
                     error(
@@ -1199,7 +1343,7 @@ class ModemController(
                 }
                 continue
             }
-            specs.put(channelSpec(ranOf(group), bands, channels).put("bandLock", true))
+            specs.put(channelSpec(ranOf(group), halBandsOf(group, bands), channels).put("bandLock", true))
         }
         // Applying bands replaces whatever is locked on that network. A cell lock on the other one stays.
         val replacedRans = override.keys.map(::ranOf)
@@ -1212,14 +1356,18 @@ class ModemController(
             val subscriptionId = subId()
             // A modem without 5G never reads the 5G bit back, so asking for it would look like a refusal.
             val mask = if (current.supports5g) mode.mask else mode.mask and Masks.G5.inv()
+            var setThroughAndroid = true
             val result =
                 try {
-                    helper.call("aosp.setAllowed", NET_MODE_TIMEOUT_MS) {
+                    helper.call("aosp.setAllowed", NET_MODE_TIMEOUT) {
                         put("subId", subscriptionId)
                         put("mask", mask)
                         put("slot", current.sim - 1)
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
+                    setThroughAndroid = false
                     when (current.backend) {
                         Backend.QUALCOMM ->
                             helper.call("qc.setRat") {
@@ -1231,6 +1379,8 @@ class ModemController(
                         Backend.MEDIATEK -> {
                             try {
                                 callMediatek("mtk.setRat") { put("mask", mask) }
+                            } catch (atError: CancellationException) {
+                                throw atError
                             } catch (atError: Exception) {
                                 log("AT+ERAT didn't set the network mode either (${reason(atError).asClause()}).")
                                 throw e
@@ -1243,16 +1393,55 @@ class ModemController(
                     }
                 }
             // MediaTek's RIL skips a mode it thinks is already set, and it doesn't see one set with AT+ERAT.
-            if (current.backend == Backend.MEDIATEK && !result.optBoolean("setByAt")) runCatching { callMediatek("mtk.setRat") { put("mask", mask) } }
+            if (current.backend == Backend.MEDIATEK && !result.optBoolean("setByAt")) runSuspendCatching { callMediatek("mtk.setRat") { put("mask", mask) } }
+            val heldBack = result.optString("heldBack")
+            // Some radios report the new mode while the SIM stays on its old network.
+            val stayed = setThroughAndroid && !result.optBoolean("airplaneMode") && heldBack.isEmpty() && !reachesNetworkIn(mask, subscriptionId)
+            val reapplied = stayed && reapplyNetMode(subscriptionId, mask)
             val notes =
                 buildList {
                     if (result.optBoolean("setByAt")) add("Android refused it, so bunnylock set it on the modem directly. It lasts until the phone restarts.")
                     if (result.optBoolean("airplaneMode")) add("The modem only switches modes with the radio off, so airplane mode came on for a moment.")
-                    val heldBack = result.optString("heldBack")
+                    if (reapplied) add("SIM ${current.sim} stayed on its old network, so the mode was set again with airplane mode on for a moment.")
+                    if (stayed && !reapplied) add("SIM ${current.sim} stayed on its old network. Turning airplane mode on and off may apply the mode.")
                     if (heldBack.isNotEmpty()) add("$heldBack The mode stays set and applies in full once that changes.")
                 }
             if (notes.isEmpty()) return@change null
             "Network mode is now \"${mode.label}\". ${notes.joinToString(" ")}"
+        }
+
+    /** True once the SIM is on a network [mask] allows. Also true when its network type is unknown, since there's nothing to compare. */
+    @SuppressLint("MissingPermission")
+    private suspend fun reachesNetworkIn(
+        mask: Long,
+        subscriptionId: Int,
+    ): Boolean {
+        val defaultTelephony = context.getSystemService(TelephonyManager::class.java) ?: return true
+        val telephony = if (subscriptionId >= 0) defaultTelephony.createForSubscriptionId(subscriptionId) else defaultTelephony
+        repeat(NET_MODE_SWITCH_CHECKS) { check ->
+            if (check > 0) delay(NET_MODE_SWITCH_CHECK)
+            val networkType =
+                runCatching { telephony.voiceNetworkType.takeIf { it != TelephonyManager.NETWORK_TYPE_UNKNOWN } ?: telephony.dataNetworkType }
+                    .getOrDefault(TelephonyManager.NETWORK_TYPE_UNKNOWN)
+            val unknown = networkType == TelephonyManager.NETWORK_TYPE_UNKNOWN || networkType == TelephonyManager.NETWORK_TYPE_IWLAN
+            if (unknown || Masks.allows(mask, networkType)) return true
+        }
+        return false
+    }
+
+    private suspend fun reapplyNetMode(
+        subscriptionId: Int,
+        mask: Long,
+    ): Boolean =
+        try {
+            helper.call("aosp.reapplyAllowed", NET_MODE_TIMEOUT) {
+                put("subId", subscriptionId)
+                put("mask", mask)
+            }
+            true
+        } catch (e: RootException) {
+            log("Setting the network mode again with the radio off didn't work (${reason(e).asClause()}).")
+            false
         }
 
     suspend fun setNrMode(mode: NrMode) =
@@ -1267,6 +1456,8 @@ class ModemController(
                             put("persist", current.persist)
                         }
                         samsungNrModeReadbackSims -= current.sim
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         if (current.device?.samsungNrMode != true) throw e
                         setSamsungNrMode(mode)
@@ -1331,7 +1522,7 @@ class ModemController(
                                 "The Qualcomm LTE lock needs at least one PCI. List several to allow a group of sectors."
                             }
                             val result =
-                                helper.call("qc.lteLock", QC_LTE_LOCK_TIMEOUT_MS) {
+                                helper.call("qc.lteLock", QC_LTE_LOCK_TIMEOUT) {
                                     put("sim", current.sim)
                                     put("earfcn", earfcn)
                                     put("pcis", JSONArray(ltePcis))
@@ -1379,7 +1570,7 @@ class ModemController(
                     if (!lock.optBoolean("active")) {
                         log("The modem answered AT+EMMCHLCK but didn't keep the lock, so cell locks go through the radio HAL from now on.")
                         mtkCellLockIgnored = true
-                        runCatching { callMediatek("mtk.cellUnlock") }
+                        runSuspendCatching { callMediatek("mtk.cellUnlock") }
                         return@change lockCellsThroughHal(lockLte, earfcn, lockNr, arfcn, nrBand, pcisGiven)
                     }
                     restartSimRadio()
@@ -1436,7 +1627,7 @@ class ModemController(
         }
         // Radio HALs differ: some want band + channel, some only the channel, some refuse channels entirely.
         val attempts = listOf(specs(withBands = true, withChannels = true), specs(withBands = false, withChannels = true))
-        val channelLocked = attempts.any { runCatching { setChannels(it) }.isSuccess }
+        val channelLocked = attempts.any { runSuspendCatching { setChannels(it) }.isSuccess }
         if (!channelLocked) {
             setChannels(specs(withBands = true, withChannels = false))
             val bandsText = listOfNotNull(lteBand?.let { "B$it" }, nrLockBand?.let { "n$it" }).joinToString(" and ")
@@ -1448,7 +1639,7 @@ class ModemController(
         var stray = settledStray()
         // A MediaTek modem takes the lock right away but may only move to it once the radio has restarted.
         if (stray !== null && current.device?.vendor == "mediatek") {
-            runCatching { restartSimRadio() }
+            runSuspendCatching { restartSimRadio() }
             stray = settledStray()
         }
         if (stray !== null) return "Android accepted the cell lock, but the phone is still on $stray. This modem doesn't seem to follow frequency locks sent this way."
@@ -1471,7 +1662,7 @@ class ModemController(
             when {
                 current.backend == Backend.QUALCOMM -> {
                     val lteUnlock =
-                        if (current.lteLock !== null) helper.call("qc.lteUnlock", QC_LTE_LOCK_TIMEOUT_MS) { put("sim", current.sim) } else null
+                        if (current.lteLock !== null) helper.call("qc.lteUnlock", QC_LTE_LOCK_TIMEOUT) { put("sim", current.sim) } else null
                     prefs.edit().remove(qcLteLockKey(current.sim)).apply()
                     if (current.nrLock !== null) helper.call("qc.nrUnlock") { put("sim", current.sim) }
                     if (lteUnlock?.optBoolean("airplaneMode") == true) return@change "Cell lock cleared. $QC_LTE_OFF_NOTE"
@@ -1486,7 +1677,7 @@ class ModemController(
                     val (cellLocks, bandLocks) = savedChannelSpecs().partition { it.isCellLock }
                     // A network with a band lock stays locked, so only the others are freed.
                     val freedRans = cellLocks.map { it.optInt("ran") } - bandLocks.map { it.optInt("ran") }.toSet()
-                    if (Ran.EUTRAN in freedRans) replaceSavedLteBands()
+                    replaceSavedBands(freedRans)
                     setChannels(JSONArray(bandLocks))
                     finishHalUnlock(cellLocks.filter { it.optInt("ran") in freedRans })?.let { return@change "Cell lock cleared. $it" }
                 }
@@ -1513,6 +1704,8 @@ class ModemController(
                     }
                     prefs.edit().putString(plmnKey(current.sim), numeric).apply()
                     return@change "SIM ${current.sim} is locked to ${formatPlmn(numeric)}."
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     log(
                         "The QMI network lock didn't work (${e.message.orEmpty().asClause()}), so Android network selection is being tried instead.",
@@ -1520,7 +1713,7 @@ class ModemController(
                 }
             }
             // Android answers only once the modem has registered on the network or given up, hence the long timeout.
-            helper.call("aosp.setPlmn", 180_000) {
+            helper.call("aosp.setPlmn", 180.seconds) {
                 put("subId", subId())
                 put("plmn", numeric)
                 put("persist", true)
@@ -1536,29 +1729,29 @@ class ModemController(
 
     private suspend fun clearPlmn() {
         if (current.backend == Backend.QUALCOMM) {
-            runCatching {
+            runSuspendCatching {
                 helper.call("qc.clearPlmn") {
                     put("sim", current.sim)
                     put("persist", current.persist)
                 }
             }
         }
-        helper.call("aosp.setPlmnAuto", 60_000) { put("subId", subId()) }
+        helper.call("aosp.setPlmnAuto", 60.seconds) { put("subId", subId()) }
         prefs.edit().remove(plmnKey(current.sim)).apply()
     }
 
     suspend fun unlockEverything() =
         change("unlock everything", "Everything is unlocked.") {
-            if (current.anyPlmnLock) runCatching { clearPlmn() }
+            if (current.anyPlmnLock) runSuspendCatching { clearPlmn() }
             when (current.backend) {
                 Backend.QUALCOMM -> {
                     helper.call("qc.reset") {
                         put("sim", current.sim)
                         put("persist", current.persist)
                     }
-                    runCatching { helper.call("qc.lteUnlock", QC_LTE_LOCK_TIMEOUT_MS) { put("sim", current.sim) } }
+                    runSuspendCatching { helper.call("qc.lteUnlock", QC_LTE_LOCK_TIMEOUT) { put("sim", current.sim) } }
                         .onSuccess { prefs.edit().remove(qcLteLockKey(current.sim)).apply() }
-                    runCatching { helper.call("qc.nrUnlock") { put("sim", current.sim) } }
+                    runSuspendCatching { helper.call("qc.nrUnlock") { put("sim", current.sim) } }
                 }
 
                 Backend.MEDIATEK -> {
@@ -1572,11 +1765,11 @@ class ModemController(
                     }
                     if (current.mtkCellLockRefused) {
                         val held = savedChannelSpecs()
-                        runCatching { setChannels(JSONArray()) }
+                        runSuspendCatching { setChannels(JSONArray()) }
                         if (held.isNotEmpty()) finishHalUnlock(held)?.let { return@change "Everything is unlocked. $it" }
                     } else {
                         val heldCellLock = current.anyCellLock
-                        runCatching { callMediatek("mtk.cellUnlock") }
+                        runSuspendCatching { callMediatek("mtk.cellUnlock") }
                         if (heldCellLock) restartSimRadio()
                     }
                 }
@@ -1590,7 +1783,7 @@ class ModemController(
 
                 Backend.ANDROID, null -> {
                     val held = savedChannelSpecs()
-                    replaceSavedLteBands()
+                    replaceSavedBands(held.map { it.optInt("ran") } + Ran.EUTRAN)
                     setChannels(JSONArray())
                     finishHalUnlock(held)?.let { return@change "Everything is unlocked. $it" }
                 }
@@ -1607,7 +1800,7 @@ class ModemController(
     suspend fun reattach() =
         change("re-attach SIM ${current.sim}", "SIM ${current.sim} is attached again.") {
             val result =
-                helper.call("qc.reattach", 60_000) {
+                helper.call("qc.reattach", 60.seconds) {
                     put("sim", current.sim)
                     put("subId", subId())
                 }
@@ -1619,11 +1812,11 @@ class ModemController(
     suspend fun rebootModem() =
         change("reboot the modem", "Modem is rebooting.") {
             if (!current.limited && current.device?.qrtr == true) {
-                helper.call("qc.reboot", 60_000)
+                helper.call("qc.reboot", 60.seconds)
                 return@change null
             }
             val result =
-                helper.call("aosp.rebootModem", 30_000) {
+                helper.call("aosp.rebootModem", 30.seconds) {
                     put("sim", current.sim)
                     put("subId", subId())
                     put("slot", current.sim - 1)
@@ -1635,14 +1828,14 @@ class ModemController(
 
     suspend fun samsungMenu() =
         change("open the Samsung band menu", "Opened the Samsung band menu.") {
-            helper.call("samsung.menu", 40_000)
+            helper.call("samsung.menu", 40.seconds)
             null
         }
 
     suspend fun sendAt(command: String): String =
         attempt("send the AT command") {
             val response =
-                helper.call("at", 15_000) {
+                helper.call("at", 15.seconds) {
                     put("node", current.atNode)
                     put("command", command)
                     put("timeout", 6000)
@@ -1695,6 +1888,11 @@ class ModemController(
             appendLine("AT ports: ${device?.atNodes?.joinToString(", ")}")
             appendLine("Modem command passthrough: ${device?.mtkOemHookStatus}")
             device?.mtkOemHookChecked?.takeIf { it.isNotEmpty() }?.let { appendLine("Checked: ${it.joinToString("; ")}") }
+            appendLine()
+            appendLine("Carriers: ${current.carriers}")
+            appendLine("Serving and 5G cells: ${current.cells.filter { it.registered || it.rat == Rat.NR }}")
+            appendLine("Android physical channels: ${physicalChannelReport ?: "not read"}")
+            if (current.backend == Backend.QUALCOMM) appendLine("QMI serving report: ${qualcommServingReport ?: "not read"}")
             appendLine()
             appendLine("Log:")
             current.log.forEach { appendLine(it) }
